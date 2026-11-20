@@ -17,6 +17,8 @@ Instead of treating AI like a single chat window, the factory models a real engi
 
 The entire system runs inside **8 lightweight Docker containers** on your own server or GPU host, completely isolated from your host files and credentials.
 
+> 🚀 **Ready to launch your factory?** Follow the step-by-step [Quickstart & Setup Guide (docs/SETUP.md)](docs/SETUP.md). For deep architectural reference, see the complete [System Specification (docs/spec.md)](docs/spec.md).
+
 ---
 
 ## 2. System Architecture & Zero-Trust Isolation

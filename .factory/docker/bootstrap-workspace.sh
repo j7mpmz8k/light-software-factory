@@ -18,9 +18,13 @@ if [ ! -s "$TOKEN_FILE" ]; then
 fi
 
 if [ ! -d /workspace/.git ]; then
-  echo "[bootstrap] Cloning ${REPO_FULL} (staging) into isolated /workspace..."
+  echo "[bootstrap] Cloning ${REPO_FULL} into isolated /workspace..."
   TOKEN="$(cat "$TOKEN_FILE")"
-  git clone --branch staging "https://x-access-token:${TOKEN}@github.com/${REPO_FULL}.git" /workspace
+  if ! git clone --branch staging "https://x-access-token:${TOKEN}@github.com/${REPO_FULL}.git" /workspace 2>/dev/null; then
+    echo "[bootstrap] Note: 'staging' branch not found on remote; cloning default branch and creating staging..."
+    git clone "https://x-access-token:${TOKEN}@github.com/${REPO_FULL}.git" /workspace
+    git -C /workspace checkout -b staging 2>/dev/null || true
+  fi
   git -C /workspace remote set-url origin "https://github.com/${REPO_FULL}.git"
 fi
 

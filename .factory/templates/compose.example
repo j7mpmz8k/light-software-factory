@@ -1,0 +1,19 @@
+FACTORY_REPO=your_github_username/your_repo_name
+POSTGRES_ADMIN_PASSWORD=change_this_postgres_admin_pw
+POSTGRES_GEMINI_PASSWORD=change_this_gemini_pw
+POSTGRES_QWEN_PASSWORD=change_this_qwen_pw
+POSTGRES_SENIOR_PASSWORD=change_this_senior_pw
+POSTGRES_FABLE_PASSWORD=change_this_fable_pw
+
+# Models
+ARCHITECT_MODEL=glm-5.3
+ARCHITECT_VISION_MODEL=glm-5.3-flash
+ARCHITECT_BACKUP_MODEL=
+SENIOR_MODEL=gemini-4-neon
+QWEN_MODEL=qwen3.8:27b
+QWEN_INFERENCE_URL=http://host.docker.internal:11434/v1
+FABLE_AUTH_MODE=oauth
+FABLE_MODEL=
+
+# Local Webhook Port
+WEBHOOK_PORT=8787

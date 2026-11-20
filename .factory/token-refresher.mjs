@@ -71,7 +71,15 @@ async function mintInstallationToken(roleName, appId, installationId, keyPath, s
   if (!appId || !installationId || !keyPath) {
     throw new Error(`Incomplete configuration for role "${roleName}" in ${APPS_ENV_PATH}`);
   }
-  const pem = fs.readFileSync(keyPath, "utf8");
+  let pemPath = keyPath;
+  if (!fs.existsSync(pemPath)) {
+    const baseName = path.basename(keyPath);
+    const inContainerPath = path.join("/run/factory-keys", baseName);
+    if (fs.existsSync(inContainerPath)) {
+      pemPath = inContainerPath;
+    }
+  }
+  const pem = fs.readFileSync(pemPath, "utf8");
   const jwt = createAppJwt(appId, pem);
 
   const res = await fetch(

@@ -1,0 +1,13 @@
+# GitHub App credentials for 1-hour installation token minter (auth-minter)
+ARCHITECT_APP_ID=123456
+ARCHITECT_INSTALLATION_ID=12345678
+ARCHITECT_KEY_PATH=/run/factory-keys/architect.pem
+ARCHITECT_SLUG=factory-architect
+
+WORKER_APP_ID=234567
+WORKER_INSTALLATION_ID=23456789
+WORKER_KEY_PATH=/run/factory-keys/worker.pem
+WORKER_SLUG=factory-worker
+
+# Optional: Personal GitHub Classic PAT with `project` scope (only needed if using user-owned Projects v2)
+GH_PROJECT_TOKEN=
