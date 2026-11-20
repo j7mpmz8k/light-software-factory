@@ -15,7 +15,7 @@ Instead of treating AI like a single chat window, the factory models a real engi
 * **A Turn-Serialized Bridge** manages incoming webhooks, bundles rapid human feedback, and ensures agents never step on each other's toes.
 * **You (The Human Owner)** retain absolute sovereign control over production releases, database migrations, and sensitive security logic.
 
-The entire system runs inside **7 lightweight Docker containers** on your own server or GPU host, completely isolated from your host files and credentials.
+The entire system runs inside **8 lightweight Docker containers** on your own server or GPU host, completely isolated from your host files and credentials.
 
 ---
 
@@ -38,21 +38,21 @@ The entire system runs inside **7 lightweight Docker containers** on your own se
          │    GLM-5.3 & Vision     │ ◄─── Evaluates diffs, approves to staging
          └────────────┬────────────┘
                       │ Dispatches atomic Sub-Issues over internal SSH (port 2222)
-         ┌────────────┼──────────────────────────┐
-         ▼            ▼                          ▼
- ┌───────────────┐ ┌───────────────┐ ┌───────────────────────┐
- │ 🛠️ worker-     │ │ 🛠️ worker-    │ │ 🔥 specialist-fable   │
- │   gemini      │ │   qwen        │ │   Claude Code         │
- │ Antigravity   │ │ Local GPU     │ │ 1-pass conflict/rescue│
- │ Flat Pro Sub  │ │ 100% Free     │ │ IDLE 95% of the time  │
- └───────┬───────┘ └───────┬───────┘ └───────────┬───────────┘
-         │                 │                     │
-         ▼                 ▼                     ▼
- ┌───────────────────────────────────────────────────────────┐
- │ 🗄️ factory-postgres (db-net)                              │
- │   3 Isolated Databases: app_gemini | app_qwen | app_fable │
- │   Clean schema reset on every branch prep                 │
- └───────────────────────────────────────────────────────────┘
+         ┌────────────┼──────────────────────────┬──────────────────────────┐
+         ▼            ▼                          ▼                          ▼
+ ┌───────────────┐ ┌───────────────┐ ┌───────────────────────┐ ┌───────────────────────┐
+ │ 🛠️ worker-     │ │ 🛠️ worker-    │ │ ⭐ senior-worker      │ │ 🔥 specialist-fable   │
+ │   gemini      │ │   qwen        │ │   Hermes (Gemini/API) │ │   Claude Code         │
+ │ Antigravity   │ │ Local GPU     │ │ Frontier API Relief   │ │ 1-pass conflict/rescue│
+ │ Flat Pro Sub  │ │ 100% Free     │ │ IDLE until needed     │ │ IDLE 95% of the time  │
+ └───────┬───────┘ └───────┬───────┘ └───────────┬───────────┘ └───────────┬───────────┘
+         │                 │                     │                         │
+         ▼                 ▼                     ▼                         ▼
+ ┌─────────────────────────────────────────────────────────────────────────────────────┐
+ │ 🗄️ factory-postgres (db-net)                                                        │
+ │   4 Isolated Databases: app_gemini | app_qwen | app_senior | app_fable              │
+ │   Clean schema reset on every branch prep                                           │
+ └─────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Why It Is "Zero-Trust"
@@ -67,10 +67,11 @@ The entire system runs inside **7 lightweight Docker containers** on your own se
 
 | Role | Container & Engine | Model | Primary Mission |
 | :--- | :--- | :--- | :--- |
-| **🧠 Architect** | `herdr-hub`<br>*(Hermes CLI)* | **GLM-5.3** +<br>GLM-5.3-Flash Vision | **Orchestrator & Reviewer:** Plans Epics into atomic Sub-Issues, inspects PR diffs, downloads and inspects Playwright screenshot evidence with Vision, squash-merges routine PRs to `staging`, and opens rolling Release PRs. |
+| **🧠 Architect** | `herdr-hub`<br>*(Hermes CLI)* | **GLM-5.3** +<br>GLM-5.3-Flash Vision | **Orchestrator & Reviewer:** Plans Epics into atomic Sub-Issues, inspects PR diffs, downloads and inspects Playwright screenshot evidence with Vision, squash-merges routine PRs to `staging`, and opens rolling Release PRs. Supports automatic failover to backup models via `llm-proxy`. |
 | **🚦 Webhook Bridge** | `herdr-hub`<br>*(Node daemon)* | — | **Traffic Controller:** Buffers human comments (8s window), serializes agent turns, catches post-merge `staging` CI breakages, and monitors for stalled workers (>45 min). |
 | **🛠️ Primary Worker** | `worker-gemini`<br>*(Antigravity CLI)* | **Gemini 3.8 Flash**<br>*(Google AI Pro)* | **Heavy Lifter:** High-speed, high-volume feature building, backend/API logic, migrations, and **Final-Wave Playwright E2E tests** (in fresh, stateless sessions). |
 | **💻 Parallel Worker** | `worker-qwen`<br>*(Hermes CLI)* | **Local Qwen 3.8 27B**<br>*(Local GPU Host)* | **Free & Parallel:** UI styling, components, unit tests, narrow 1–2 screen cross-model verification, and overflow capacity if Gemini hits rolling rate limits. |
+| **⭐ Senior Worker** | `senior-worker`<br>*(Hermes CLI)* | **Gemini 4 Neon**<br>*(or DeepSeek / Frontier API)* | **High-Difficulty Relief:** Steps in for complex architectural slices, difficult algorithmic refactors, or when Antigravity quota is depleted. Idles when not needed to conserve API spend. |
 | **🔥 Specialist** | `specialist-fable`<br>*(Claude Code)* | **Claude Fable** | **On-Demand SWAT Team:** Idle 95% of the time. Capped at strictly **1 pass per PR** for hairy merge conflicts or 3-strike CI loops. Never used for routine feature writing. |
 
 ---
@@ -160,11 +161,25 @@ You get rolling 1-hour request counts, total tokens consumed (prompt vs completi
 ### Spend Circuit Breakers
 `llm-proxy` strictly enforces hourly hard caps defined in your secrets configuration (e.g. 240 requests/hour for GLM, 60 requests/hour for Claude). If a runaway loop occurs, the proxy shuts off incoming calls and returns HTTP 429 before your wallet is drained.
 
-### Hot-Swapping Models
-Want to test a new model? You don't have to rebuild images:
-1. Update `ARCHITECT_MODEL` or `QWEN_MODEL` in `~/.config/light-factory/compose.env`.
-2. Run `docker compose --env-file ~/.config/light-factory/compose.env up -d herdr-hub`.
-3. The new model takes over immediately without data loss.
+### Hot-Swapping Models & Providers
+Want to test a new model or switch providers? You never have to rebuild images. Use the built-in hot-swap utility:
+```bash
+# Hot-swap Architect model & vision
+.factory/hotswap.sh architect deepseek-coder glm-5.3-flash
+
+# Set or hot-swap Architect backup model (auto-failover on rate limits / 500s)
+.factory/hotswap.sh backup deepseek-chat https://api.deepseek.com/v1
+
+# Hot-swap Senior Worker model or API endpoint
+.factory/hotswap.sh senior gemini-4-neon
+
+# Hot-swap Qwen worker model or local inference server URL
+.factory/hotswap.sh qwen qwen3.8:27b http://host.docker.internal:11434/v1
+
+# Hot-swap Fable specialist model
+.factory/hotswap.sh fable claude-3-7-sonnet-20250219
+```
+The script automatically updates `compose.env`, updates allowlists in `llm-proxy`, and restarts the targeted container in seconds without data loss.
 
 ---
 
@@ -174,9 +189,9 @@ Want to test a new model? You don't have to rebuild images:
   A PR hit 3 CI failures or post-Fable issues. Inspect the Architect's comment on the PR. You can either push a commit yourself, post advice in a comment, or close the PR.
 * **Watchdog alert on an Issue:**
   If an assigned worker goes silent for >45 minutes without pushing commits, the bridge pings the Architect. The Architect checks whether the worker crashed or hit rate limits, and either nudges it or overflows the task to another worker.
-* **Detached Herdr session:**
-  If you ever need to inspect what the agents are actively typing or running in real-time, attach to the unified terminal workspace:
+* **Live Interactive Herdr Workspace (Watch & Intervene):**
+  If you ever want to see what the agents are actively typing in real-time or intervene directly from your laptop:
   ```bash
   docker compose exec -it herdr-hub /workspace/.factory/launch-panes.sh
   ```
-  *(Press `ctrl+b q` anytime to detach cleanly while leaving everything running.)*
+  This opens the live 6-tab terminal interface (`bridge`, `architect`, `worker-gemini`, `worker-qwen`, `senior-worker`, `specialist-fable`). You can switch tabs, watch live output, or type directly into any agent pane to take over. Press `ctrl+b q` anytime to detach cleanly while leaving everything running.
