@@ -20,6 +20,7 @@ chmod 600 "$HOME/.ssh/config"
 # 2. Auto-sync Hermes Architect profile (Fix A12: declare api_key explicitly)
 ARCH_MODEL="${ARCHITECT_MODEL:-glm-5.3}"
 VIS_MODEL="${ARCHITECT_VISION_MODEL:-glm-5.3-flash}"
+BACKUP_MODEL="${ARCHITECT_BACKUP_MODEL:-}"
 PROXY_TOK="${ARCHITECT_PROXY_TOKEN:-proxy-architect-only}"
 
 mkdir -p "$HOME/.hermes/profiles/architect"
@@ -40,6 +41,17 @@ plugins:
   enabled:
     - herdr-agent-state
 EOF
+
+# Append native fallback provider if backup model is defined
+if [ -n "$BACKUP_MODEL" ]; then
+  cat <<EOF >> "$HOME/.hermes/profiles/architect/config.yaml"
+fallback_providers:
+  - provider: "custom"
+    model: "${BACKUP_MODEL}"
+    base_url: "http://llm-proxy:4000/backup"
+    api_key: "${PROXY_TOK}"
+EOF
+fi
 
 # Copy Herdr plugin into profile so Herdr receives native state rollups
 if [ -d "$HOME/.hermes/plugins/herdr-agent-state" ]; then

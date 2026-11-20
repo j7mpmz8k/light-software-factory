@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Usage:
 #   .factory/hotswap.sh architect <model_name> [vision_model_name]
+#   .factory/hotswap.sh backup <model_name> [backup_upstream_url]
 #   .factory/hotswap.sh qwen <model_name> [inference_url]
 #   .factory/hotswap.sh fable <model_name>
 set -euo pipefail
@@ -25,6 +26,26 @@ case "$TARGET" in
     echo "[hotswap] Recreated llm-proxy & herdr-hub with new model."
     ;;
 
+  backup)
+    NEW_MODEL="${2:?Backup model name required (e.g. deepseek-chat, qwen2.5-coder:32b)}"
+    NEW_URL="${3:-}"
+    if grep -q "^ARCHITECT_BACKUP_MODEL=" "$COMPOSE_ENV"; then
+      sed -i "s/^ARCHITECT_BACKUP_MODEL=.*/ARCHITECT_BACKUP_MODEL=${NEW_MODEL}/" "$COMPOSE_ENV"
+    else
+      echo "ARCHITECT_BACKUP_MODEL=${NEW_MODEL}" >> "$COMPOSE_ENV"
+    fi
+    if [ -n "$NEW_URL" ]; then
+      if grep -q "^BACKUP_UPSTREAM_URL=" "$COMPOSE_ENV"; then
+        sed -i "s|^BACKUP_UPSTREAM_URL=.*|BACKUP_UPSTREAM_URL=${NEW_URL}|" "$COMPOSE_ENV"
+      else
+        echo "BACKUP_UPSTREAM_URL=${NEW_URL}" >> "$COMPOSE_ENV"
+      fi
+    fi
+    echo "[hotswap] Updated Architect backup model in compose.env -> ${NEW_MODEL}"
+    docker compose --env-file "$COMPOSE_ENV" up -d --force-recreate llm-proxy herdr-hub
+    echo "[hotswap] Recreated llm-proxy & herdr-hub with backup model enabled."
+    ;;
+
   qwen)
     NEW_MODEL="${2:?Worker model name required (e.g. qwen3.8:27b, codellama)}"
     NEW_URL="${3:-}"
@@ -44,7 +65,7 @@ case "$TARGET" in
     ;;
 
   *)
-    echo "Usage: $0 <architect|qwen|fable> <model_name> [optional_url_or_vision]" >&2
+    echo "Usage: $0 <architect|backup|qwen|fable> <model_name> [optional_url_or_vision]" >&2
     exit 1
     ;;
 esac

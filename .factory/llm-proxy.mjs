@@ -45,6 +45,14 @@ const VISION_UPSTREAM_URL = (
 const VISION_API_KEY =
   secrets.VISION_API_KEY || process.env.VISION_API_KEY || GLM_API_KEY;
 
+const BACKUP_UPSTREAM_URL = (
+  secrets.BACKUP_UPSTREAM_URL ||
+  process.env.BACKUP_UPSTREAM_URL ||
+  GLM_UPSTREAM_URL
+).replace(/\/+$/, "");
+const BACKUP_API_KEY =
+  secrets.BACKUP_API_KEY || process.env.BACKUP_API_KEY || GLM_API_KEY;
+
 const ANTHROPIC_UPSTREAM_URL = (
   secrets.ANTHROPIC_UPSTREAM_URL ||
   process.env.ANTHROPIC_UPSTREAM_URL ||
@@ -75,6 +83,7 @@ const ALLOWED_ARCHITECT_MODELS = new Set(
   [
     process.env.ARCHITECT_MODEL,
     process.env.ARCHITECT_VISION_MODEL,
+    process.env.ARCHITECT_BACKUP_MODEL,
     ...(process.env.EXTRA_ALLOWED_MODELS || "").split(","),
   ]
     .map((s) => (s || "").trim())
@@ -104,6 +113,7 @@ const telemetry = {
   routes: {
     glm: emptyRouteStats(),
     vision: emptyRouteStats(),
+    backup: emptyRouteStats(),
     anthropic: emptyRouteStats(),
   },
 };
@@ -303,11 +313,14 @@ const server = http.createServer(async (req, res) => {
   } else if (rawUrl === "/vision" || rawUrl.startsWith("/vision/")) {
     route = "vision";
     subPath = rawUrl.slice("/vision".length) || "/";
+  } else if (rawUrl === "/backup" || rawUrl.startsWith("/backup/")) {
+    route = "backup";
+    subPath = rawUrl.slice("/backup".length) || "/";
   } else if (rawUrl === "/anthropic" || rawUrl.startsWith("/anthropic/")) {
     route = "anthropic";
     subPath = rawUrl.slice("/anthropic".length) || "/";
   } else {
-    return sendJson(res, 404, { error: "Unknown proxy route. Use /glm, /vision, /anthropic, /health, or /stats." });
+    return sendJson(res, 404, { error: "Unknown proxy route. Use /glm, /vision, /backup, /anthropic, /health, or /stats." });
   }
 
   // Answer Hermes probe endpoints locally without charging hourly quota or failing upstream
@@ -320,7 +333,7 @@ const server = http.createServer(async (req, res) => {
   const incomingAuth = String(req.headers["authorization"] || "");
   const incomingXApiKey = String(req.headers["x-api-key"] || "");
 
-  if (route === "glm" || route === "vision") {
+  if (route === "glm" || route === "vision" || route === "backup") {
     if (incomingAuth !== `Bearer ${ARCHITECT_PROXY_TOKEN}`) {
       return sendJson(res, 401, { error: "Unauthorized for architect LLM route" });
     }
@@ -361,7 +374,7 @@ const server = http.createServer(async (req, res) => {
     } catch {}
 
     if (
-      (route === "glm" || route === "vision") &&
+      (route === "glm" || route === "vision" || route === "backup") &&
       ALLOWED_ARCHITECT_MODELS.size > 0 &&
       requestedModel &&
       !ALLOWED_ARCHITECT_MODELS.has(requestedModel)
@@ -388,6 +401,9 @@ const server = http.createServer(async (req, res) => {
   } else if (route === "vision") {
     targetUrl = joinUpstreamUrl(VISION_UPSTREAM_URL, subPath);
     if (VISION_API_KEY) outHeaders["authorization"] = `Bearer ${VISION_API_KEY}`;
+  } else if (route === "backup") {
+    targetUrl = joinUpstreamUrl(BACKUP_UPSTREAM_URL, subPath);
+    if (BACKUP_API_KEY) outHeaders["authorization"] = `Bearer ${BACKUP_API_KEY}`;
   } else if (route === "anthropic") {
     targetUrl = joinUpstreamUrl(ANTHROPIC_UPSTREAM_URL, subPath);
     outHeaders["x-api-key"] = ANTHROPIC_API_KEY;
