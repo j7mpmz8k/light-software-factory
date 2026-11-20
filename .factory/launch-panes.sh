@@ -16,7 +16,7 @@ if [ -n "$EXISTING_WS" ]; then
   exec herdr
 fi
 
-echo "[launch-panes] Bootstrapping native Herdr workspace 'factory' with 5 tabs..."
+echo "[launch-panes] Bootstrapping native Herdr workspace 'factory' with 6 tabs..."
 
 # 1. Create workspace + root tab for bridge
 WS_JSON="$(herdr workspace create --cwd /workspace --label factory --focus)"
@@ -62,7 +62,10 @@ launch_ssh_agent_tab "worker-gemini" "antigravity-cli" "agy --mode=accept-edits"
 # 4. Tab: worker-qwen (unattended --yolo Fix A4)
 launch_ssh_agent_tab "worker-qwen" "hermes" "hermes --profile qwen --yolo"
 
-# 5. Tab: specialist-fable (unattended --dangerously-skip-permissions Fix A4)
+# 5. Tab: senior-worker (unattended Hermes API relief worker)
+launch_ssh_agent_tab "senior-worker" "hermes" "hermes --profile senior --yolo"
+
+# 6. Tab: specialist-fable (unattended --dangerously-skip-permissions Fix A4)
 FABLE_CMD="claude --dangerously-skip-permissions"
 [ -n "${FABLE_MODEL:-}" ] && FABLE_CMD="claude --dangerously-skip-permissions --model \"${FABLE_MODEL}\""
 launch_ssh_agent_tab "specialist-fable" "claude" "$FABLE_CMD"

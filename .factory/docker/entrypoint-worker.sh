@@ -41,6 +41,29 @@ EOF
   echo "[worker-qwen] Configured Hermes -> ${QWEN_MOD} (64k context) @ ${QWEN_URL}"
 fi
 
+if [ "${WORKER_NAME:-}" = "senior-worker" ]; then
+  SENIOR_URL="${SENIOR_INFERENCE_URL:-http://llm-proxy:4000/senior}"
+  SENIOR_MOD="${SENIOR_MODEL:-gemini-4-neon}"
+  SENIOR_KEY="${SENIOR_API_KEY:-proxy-senior-only}"
+
+  mkdir -p "$HOME/.hermes/profiles/senior"
+  cat <<EOF > "$HOME/.hermes/profiles/senior/config.yaml"
+model:
+  default: "${SENIOR_MOD}"
+  provider: "custom"
+  base_url: "${SENIOR_URL}"
+  api_key: "${SENIOR_KEY}"
+  context_length: 64000
+EOF
+  cat <<EOF > "$HOME/.hermes/profiles/senior/.env"
+OPENAI_API_KEY=${SENIOR_KEY}
+OPENAI_BASE_URL=${SENIOR_URL}
+EOF
+  cp "$HOME/.hermes/profiles/senior/.env" "$HOME/.hermes/.env"
+  chmod 600 "$HOME/.hermes/.env" "$HOME/.hermes/profiles/senior/.env"
+  echo "[senior-worker] Configured Hermes -> ${SENIOR_MOD} @ ${SENIOR_URL}"
+fi
+
 if [ "${WORKER_NAME:-}" = "specialist-fable" ]; then
   if [ "${FABLE_AUTH_MODE:-oauth}" = "proxy" ]; then
     cat <<EOF >> "$HOME/.worker-env.sh"

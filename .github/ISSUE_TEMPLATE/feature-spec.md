@@ -27,7 +27,7 @@ labels: []
 
 ## Routing & Guardrail Hints
 - **Human Gate:** *(Auto-locked by `human-gate-guard` & moved to `Awaiting Approval` if touching `migrations/`, `*.sql`, `auth/`, `.github/`, `.factory/`, `docker-compose*.yml`, or `AGENTS.md`. Add `human-gate` label only if manual override is needed on other paths.)*
-- **Suggested Worker:** `worker-gemini` (heavy/multi-file/backend/DB/integration, OR **Primary E2E Writer in fresh session**) OR `worker-qwen` (UI/unit/local, narrow 1–2 screen cross-model E2E in fresh session, or Antigravity quota overflow)
+- **Suggested Worker:** `worker-gemini` (heavy/multi-file/backend/DB/integration, OR **Primary E2E Writer in fresh session**) OR `worker-qwen` (UI/unit/local, narrow 1–2 screen cross-model E2E in fresh session, or Antigravity quota overflow) OR `senior-worker` (complex architectural refactors, high-difficulty algorithms, or relief when Gemini quota is exhausted)
 - **Session Mode:** `Standard` *(build slice)* OR `FRESH / STATELESS SESSION REQUIRED` *(Final-Wave E2E — reset chat context before starting)*
 - **Relevant Skills:** `.agents/skills/modern-web-standards` / `.agents/skills/postgres-migrations` / `.agents/skills/e2e-testing`
 - **Out of Scope:** <!-- Explicitly state what NOT to touch (especially files assigned to sibling Sub-Issues in the same wave) -->

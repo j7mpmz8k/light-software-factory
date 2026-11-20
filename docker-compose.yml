@@ -60,6 +60,9 @@ services:
       ARCHITECT_BACKUP_MODEL: ${ARCHITECT_BACKUP_MODEL:-}
       BACKUP_UPSTREAM_URL: ${BACKUP_UPSTREAM_URL:-}
       BACKUP_API_KEY: ${BACKUP_API_KEY:-}
+      SENIOR_MODEL: ${SENIOR_MODEL:-gemini-4-neon}
+      SENIOR_UPSTREAM_URL: ${SENIOR_UPSTREAM_URL:-https://generativelanguage.googleapis.com/v1beta/openai}
+      SENIOR_PROXY_TOKEN: ${SENIOR_PROXY_TOKEN:-proxy-senior-only}
       EXTRA_ALLOWED_MODELS: ${EXTRA_ALLOWED_MODELS:-}
       ARCHITECT_PROXY_TOKEN: ${ARCHITECT_PROXY_TOKEN:-proxy-architect-only}
       FABLE_PROXY_TOKEN: ${FABLE_PROXY_TOKEN:-proxy-fable-only}
@@ -95,6 +98,7 @@ services:
       POSTGRES_DB: postgres
       POSTGRES_GEMINI_PASSWORD: ${POSTGRES_GEMINI_PASSWORD}
       POSTGRES_QWEN_PASSWORD: ${POSTGRES_QWEN_PASSWORD}
+      POSTGRES_SENIOR_PASSWORD: ${POSTGRES_SENIOR_PASSWORD:-senior_dev_secret_pw}
       POSTGRES_FABLE_PASSWORD: ${POSTGRES_FABLE_PASSWORD}
     volumes:
       - ./.factory/postgres/init-dbs.sh:/docker-entrypoint-initdb.d/01-init-dbs.sh:ro
@@ -217,7 +221,45 @@ services:
     mem_limit: 8g
     cpus: "4.0"
 
-  # 7. Escalation Specialist (Claude Code — IDLE 95%)
+  # 7. Senior Worker (Hermes API — High-Capability / Relief Specialist)
+  senior-worker:
+    build:
+      context: .
+      dockerfile: .factory/docker/Dockerfile.worker
+      args:
+        FACTORY_UID: "${FACTORY_UID:-1000}"
+        FACTORY_GID: "${FACTORY_GID:-1000}"
+    container_name: herdr-senior-worker
+    <<: *security-hardening
+    networks:
+      - factory-net
+      - llm-net
+      - db-net
+    environment:
+      WORKER_NAME: senior-worker
+      FACTORY_ROLE: worker
+      FACTORY_AUTH_ROOT: /run/factory-auth
+      FACTORY_REPO: ${FACTORY_REPO}
+      DATABASE_URL: "postgres://worker_senior:${POSTGRES_SENIOR_PASSWORD:-senior_dev_secret_pw}@factory-postgres:5432/app_senior"
+      SENIOR_INFERENCE_URL: ${SENIOR_INFERENCE_URL:-http://llm-proxy:4000/senior}
+      SENIOR_MODEL: ${SENIOR_MODEL:-gemini-4-neon}
+      SENIOR_API_KEY: ${SENIOR_PROXY_TOKEN:-proxy-senior-only}
+    volumes:
+      - auth-worker:/run/factory-auth/worker:ro
+      - ${HOME}/.config/light-factory/internal-ssh/authorized_keys:/run/factory-ssh/authorized_keys:ro
+      - senior-workspace:/workspace
+      - senior-hermes:/home/factory/.hermes
+    depends_on:
+      auth-minter:
+        condition: service_healthy
+      llm-proxy:
+        condition: service_healthy
+      factory-postgres:
+        condition: service_healthy
+    mem_limit: 8g
+    cpus: "4.0"
+
+  # 8. Escalation Specialist (Claude Code — IDLE 95%)
   specialist-fable:
     build:
       context: .
@@ -267,5 +309,7 @@ volumes:
   gemini-dotgemini:
   qwen-workspace:
   qwen-hermes:
+  senior-workspace:
+  senior-hermes:
   fable-workspace:
   fable-auth:

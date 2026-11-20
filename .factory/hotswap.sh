@@ -3,6 +3,7 @@
 #   .factory/hotswap.sh architect <model_name> [vision_model_name]
 #   .factory/hotswap.sh backup <model_name> [backup_upstream_url]
 #   .factory/hotswap.sh qwen <model_name> [inference_url]
+#   .factory/hotswap.sh senior <model_name> [senior_upstream_url]
 #   .factory/hotswap.sh fable <model_name>
 set -euo pipefail
 
@@ -56,6 +57,26 @@ case "$TARGET" in
     echo "[hotswap] Restarted worker-qwen with new model."
     ;;
 
+  senior)
+    NEW_MODEL="${2:?Senior worker model required (e.g. gemini-4-neon, deepseek-chat, o3-mini)}"
+    NEW_URL="${3:-}"
+    if grep -q "^SENIOR_MODEL=" "$COMPOSE_ENV"; then
+      sed -i "s/^SENIOR_MODEL=.*/SENIOR_MODEL=${NEW_MODEL}/" "$COMPOSE_ENV"
+    else
+      echo "SENIOR_MODEL=${NEW_MODEL}" >> "$COMPOSE_ENV"
+    fi
+    if [ -n "$NEW_URL" ]; then
+      if grep -q "^SENIOR_UPSTREAM_URL=" "$COMPOSE_ENV"; then
+        sed -i "s|^SENIOR_UPSTREAM_URL=.*|SENIOR_UPSTREAM_URL=${NEW_URL}|" "$COMPOSE_ENV"
+      else
+        echo "SENIOR_UPSTREAM_URL=${NEW_URL}" >> "$COMPOSE_ENV"
+      fi
+    fi
+    echo "[hotswap] Updated Senior Worker model in compose.env -> ${NEW_MODEL}"
+    docker compose --env-file "$COMPOSE_ENV" restart senior-worker
+    echo "[hotswap] Restarted senior-worker with new model."
+    ;;
+
   fable)
     NEW_MODEL="${2:?Fable model name required (e.g. claude-3-7-sonnet-20250219)}"
     sed -i "s/^FABLE_MODEL=.*/FABLE_MODEL=${NEW_MODEL}/" "$COMPOSE_ENV"
@@ -65,7 +86,7 @@ case "$TARGET" in
     ;;
 
   *)
-    echo "Usage: $0 <architect|backup|qwen|fable> <model_name> [optional_url_or_vision]" >&2
+    echo "Usage: $0 <architect|backup|qwen|senior|fable> <model_name> [optional_url_or_vision]" >&2
     exit 1
     ;;
 esac

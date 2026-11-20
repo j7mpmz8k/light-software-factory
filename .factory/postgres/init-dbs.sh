@@ -29,10 +29,11 @@ EOSQL
 
 create_isolated_db "worker_gemini" "app_gemini" "${POSTGRES_GEMINI_PASSWORD:?POSTGRES_GEMINI_PASSWORD required}"
 create_isolated_db "worker_qwen"   "app_qwen"   "${POSTGRES_QWEN_PASSWORD:?POSTGRES_QWEN_PASSWORD required}"
+create_isolated_db "worker_senior" "app_senior" "${POSTGRES_SENIOR_PASSWORD:-senior_dev_secret_pw}"
 create_isolated_db "worker_fable"  "app_fable"  "${POSTGRES_FABLE_PASSWORD:?POSTGRES_FABLE_PASSWORD required}"
 
 psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
   REVOKE ALL ON DATABASE ${POSTGRES_DB} FROM PUBLIC;
 EOSQL
 
-echo "[factory-postgres] All 3 isolated worker databases ready."
+echo "[factory-postgres] All 4 isolated worker databases ready."

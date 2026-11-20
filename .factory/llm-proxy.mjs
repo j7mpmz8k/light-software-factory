@@ -53,6 +53,20 @@ const BACKUP_UPSTREAM_URL = (
 const BACKUP_API_KEY =
   secrets.BACKUP_API_KEY || process.env.BACKUP_API_KEY || GLM_API_KEY;
 
+const SENIOR_UPSTREAM_URL = (
+  secrets.SENIOR_UPSTREAM_URL ||
+  process.env.SENIOR_UPSTREAM_URL ||
+  "https://generativelanguage.googleapis.com/v1beta/openai"
+).replace(/\/+$/, "");
+const SENIOR_API_KEY =
+  secrets.SENIOR_API_KEY ||
+  secrets.GEMINI_API_KEY ||
+  process.env.SENIOR_API_KEY ||
+  process.env.GEMINI_API_KEY ||
+  "";
+const SENIOR_PROXY_TOKEN =
+  process.env.SENIOR_PROXY_TOKEN || secrets.SENIOR_PROXY_TOKEN || "proxy-senior-only";
+
 const ANTHROPIC_UPSTREAM_URL = (
   secrets.ANTHROPIC_UPSTREAM_URL ||
   process.env.ANTHROPIC_UPSTREAM_URL ||
@@ -84,6 +98,7 @@ const ALLOWED_ARCHITECT_MODELS = new Set(
     process.env.ARCHITECT_MODEL,
     process.env.ARCHITECT_VISION_MODEL,
     process.env.ARCHITECT_BACKUP_MODEL,
+    process.env.SENIOR_MODEL,
     ...(process.env.EXTRA_ALLOWED_MODELS || "").split(","),
   ]
     .map((s) => (s || "").trim())
@@ -114,6 +129,7 @@ const telemetry = {
     glm: emptyRouteStats(),
     vision: emptyRouteStats(),
     backup: emptyRouteStats(),
+    senior: emptyRouteStats(),
     anthropic: emptyRouteStats(),
   },
 };
@@ -316,11 +332,14 @@ const server = http.createServer(async (req, res) => {
   } else if (rawUrl === "/backup" || rawUrl.startsWith("/backup/")) {
     route = "backup";
     subPath = rawUrl.slice("/backup".length) || "/";
+  } else if (rawUrl === "/senior" || rawUrl.startsWith("/senior/")) {
+    route = "senior";
+    subPath = rawUrl.slice("/senior".length) || "/";
   } else if (rawUrl === "/anthropic" || rawUrl.startsWith("/anthropic/")) {
     route = "anthropic";
     subPath = rawUrl.slice("/anthropic".length) || "/";
   } else {
-    return sendJson(res, 404, { error: "Unknown proxy route. Use /glm, /vision, /backup, /anthropic, /health, or /stats." });
+    return sendJson(res, 404, { error: "Unknown proxy route. Use /glm, /vision, /backup, /senior, /anthropic, /health, or /stats." });
   }
 
   // Answer Hermes probe endpoints locally without charging hourly quota or failing upstream
@@ -340,6 +359,10 @@ const server = http.createServer(async (req, res) => {
     if (!checkRateLimit("glm", GLM_MAX_REQ_PER_HOUR)) {
       telemetry.routes[route].rateLimited += 1;
       return sendJson(res, 429, { error: `Architect hourly limit (${GLM_MAX_REQ_PER_HOUR}/hr) exceeded` });
+    }
+  } else if (route === "senior") {
+    if (incomingAuth !== `Bearer ${SENIOR_PROXY_TOKEN}`) {
+      return sendJson(res, 401, { error: "Unauthorized for senior worker route" });
     }
   } else if (route === "anthropic") {
     if (!ANTHROPIC_API_KEY) {
@@ -374,7 +397,7 @@ const server = http.createServer(async (req, res) => {
     } catch {}
 
     if (
-      (route === "glm" || route === "vision" || route === "backup") &&
+      (route === "glm" || route === "vision" || route === "backup" || route === "senior") &&
       ALLOWED_ARCHITECT_MODELS.size > 0 &&
       requestedModel &&
       !ALLOWED_ARCHITECT_MODELS.has(requestedModel)
@@ -404,6 +427,9 @@ const server = http.createServer(async (req, res) => {
   } else if (route === "backup") {
     targetUrl = joinUpstreamUrl(BACKUP_UPSTREAM_URL, subPath);
     if (BACKUP_API_KEY) outHeaders["authorization"] = `Bearer ${BACKUP_API_KEY}`;
+  } else if (route === "senior") {
+    targetUrl = joinUpstreamUrl(SENIOR_UPSTREAM_URL, subPath);
+    if (SENIOR_API_KEY) outHeaders["authorization"] = `Bearer ${SENIOR_API_KEY}`;
   } else if (route === "anthropic") {
     targetUrl = joinUpstreamUrl(ANTHROPIC_UPSTREAM_URL, subPath);
     outHeaders["x-api-key"] = ANTHROPIC_API_KEY;

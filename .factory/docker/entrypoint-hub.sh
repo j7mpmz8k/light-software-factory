@@ -5,7 +5,7 @@ set -euo pipefail
 mkdir -p "$HOME/.ssh" "$HOME/.config/herdr/bridge-state"
 chmod 700 "$HOME/.ssh"
 cat <<'EOF' > "$HOME/.ssh/config"
-Host worker-gemini worker-qwen specialist-fable
+Host worker-gemini worker-qwen senior-worker specialist-fable
   User factory
   Port 2222
   IdentityFile /run/factory-ssh/id_ed25519
