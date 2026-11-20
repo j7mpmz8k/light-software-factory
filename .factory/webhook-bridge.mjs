@@ -1,0 +1,553 @@
+#!/usr/bin/env node
+import http from "node:http";
+import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
+
+const candidateEnvFiles = [
+  process.env.BRIDGE_ENV_FILE,
+  "/run/factory-config/bridge.env",
+  path.resolve("/workspace/.factory/.env"),
+  path.resolve("/workspace/.env"),
+].filter(Boolean);
+
+for (const envFile of candidateEnvFiles) {
+  if (fs.existsSync(envFile)) {
+    for (const line of fs.readFileSync(envFile, "utf8").split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      const idx = trimmed.indexOf("=");
+      if (idx > 0) {
+        const key = trimmed.slice(0, idx).trim();
+        const val = trimmed.slice(idx + 1).trim().replace(/^["']|["']$/g, "");
+        if (!process.env[key]) process.env[key] = val;
+      }
+    }
+    break;
+  }
+}
+
+function detectHumanReviewer() {
+  if (process.env.HUMAN_REVIEWER) return process.env.HUMAN_REVIEWER.replace(/^@/, "").trim();
+  try {
+    const codeowners = fs.readFileSync("/workspace/.github/CODEOWNERS", "utf8");
+    const m = codeowners.match(/@([A-Za-z0-9-]+)/);
+    return m ? m[1] : "";
+  } catch {
+    return "";
+  }
+}
+
+const PORT = Number(process.env.WEBHOOK_PORT || 8787);
+const BIND_HOST = process.env.WEBHOOK_BIND_HOST || "0.0.0.0";
+const SECRET = process.env.GITHUB_WEBHOOK_SECRET || "";
+const ARCHITECT_PANE = process.env.ARCHITECT_PANE || "architect";
+const FABLE_PANE = process.env.FABLE_PANE || "specialist-fable";
+const MAX_CI_RETRIES = Number(process.env.MAX_CI_RETRIES || 3);
+const CI_WORKFLOW_NAME = process.env.CI_WORKFLOW_NAME || "CI & PR Evidence";
+const PROJECT_NUMBER = process.env.PROJECT_NUMBER || "";
+const REPO_FULL = process.env.FACTORY_REPO || "";
+const HUMAN_REVIEWER = detectHumanReviewer();
+
+const STATE_DIR = path.resolve(
+  process.env.BRIDGE_STATE_DIR || "/home/factory/.config/herdr/bridge-state"
+);
+const RETRY_STATE_FILE = path.join(STATE_DIR, "retry-state.json");
+const QUEUE_STATE_FILE = path.join(STATE_DIR, "architect-queue.json");
+const COMMENT_COALESCE_MS = Number(process.env.COMMENT_COALESCE_MS || 8_000);
+const ARCHITECT_WAIT_TIMEOUT_MS = Number(process.env.ARCHITECT_WAIT_TIMEOUT_MS || 300_000);
+const STALL_WATCHDOG_INTERVAL_MS = Number(process.env.STALL_WATCHDOG_INTERVAL_MS || 900_000);
+const STALL_THRESHOLD_MS = Number(process.env.STALL_THRESHOLD_MS || 2_700_000);
+
+const PRIORITY = {
+  HUMAN_COMMENT: 10,
+  CI_URGENT: 20,
+  REVIEW_WAVE: 30,
+  PLAN_READY: 40,
+};
+
+const BOARD_SYNC_SCRIPT = path.resolve("/workspace/.factory/board-sync.sh");
+const SUB_ISSUE_SCRIPT = path.resolve("/workspace/.factory/sub-issue.sh");
+const SYNC_HUB_SCRIPT = path.resolve("/workspace/.factory/sync-hub.sh");
+const FACTORY_GH = path.resolve("/workspace/.factory/bin/gh");
+const RELEASE_PR_SCRIPT = path.resolve("/workspace/.factory/release-pr.sh");
+
+const ARCHITECT_EXEC_ENV = {
+  ...process.env,
+  FACTORY_ROLE: "architect",
+};
+
+// Fix D4: Do not drop comments quoting **[Architect]**; filter by sender bot status
+function isAgentOrBotComment(sender = {}) {
+  const login = String(sender?.login || "").toLowerCase();
+  return sender?.type === "Bot" || login.endsWith("[bot]");
+}
+
+// Fix B1: Ensure comment is authored by a repo collaborator/owner, not an unauthenticated stranger
+function isAuthorizedHuman(authorAssociation, sender = {}) {
+  if (isAgentOrBotComment(sender)) return false;
+  const TRUSTED_ROLES = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
+  return TRUSTED_ROLES.has(String(authorAssociation || "").toUpperCase());
+}
+
+function extractLinkedIssue(body = "", headBranch = "") {
+  const bodyMatch = String(body || "").match(/(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)/i);
+  if (bodyMatch) return Number(bodyMatch[1]);
+  const branchMatch = String(headBranch || "").match(/issue-(\d+)/i);
+  return branchMatch ? Number(branchMatch[1]) : null;
+}
+
+async function ghAsArchitect(args, timeout = 20_000) {
+  return execFileAsync(FACTORY_GH, args, { env: ARCHITECT_EXEC_ENV, timeout });
+}
+
+async function syncHubWorkspace() {
+  if (!fs.existsSync(SYNC_HUB_SCRIPT)) return;
+  try {
+    await execFileAsync(SYNC_HUB_SCRIPT, [], {
+      env: ARCHITECT_EXEC_ENV,
+      timeout: 30_000,
+    });
+  } catch (err) {
+    console.warn("[bridge] Non-fatal sync-hub.sh warning:", err.message);
+  }
+}
+
+async function syncBoardField(targetRef, fieldName, value) {
+  if (!PROJECT_NUMBER || !targetRef) return;
+  if (!fs.existsSync(BOARD_SYNC_SCRIPT)) return;
+  try {
+    await execFileAsync(BOARD_SYNC_SCRIPT, [String(targetRef), String(fieldName), String(value)], {
+      env: ARCHITECT_EXEC_ENV,
+      timeout: 20_000,
+    });
+  } catch (err) {
+    console.warn(`[bridge] Non-fatal board sync warning for ${targetRef}:`, err.message);
+  }
+}
+
+async function surfaceAwaitingApproval(prNumber, linkedIssue, isReleasePr = false) {
+  try {
+    await ghAsArchitect(["pr", "edit", String(prNumber), "--add-label", "human-gate"]).catch(() => {});
+    if (HUMAN_REVIEWER) {
+      await ghAsArchitect(["pr", "edit", String(prNumber), "--add-reviewer", HUMAN_REVIEWER]).catch(() => {});
+    }
+    if (linkedIssue) {
+      await ghAsArchitect(["issue", "edit", String(linkedIssue), "--add-label", "human-gate"]).catch(() => {});
+      await syncBoardField(linkedIssue, "Status", "Awaiting Approval");
+    }
+    if (isReleasePr || !linkedIssue) {
+      await syncBoardField(`pr:${prNumber}`, "Status", "Awaiting Approval");
+    }
+  } catch (err) {
+    console.warn(`[bridge] Non-fatal Awaiting Approval sync warning for PR #${prNumber}:`, err.message);
+  }
+}
+
+async function getParentEpic(issueNumber) {
+  if (!issueNumber || !fs.existsSync(SUB_ISSUE_SCRIPT)) return null;
+  try {
+    const { stdout } = await execFileAsync(SUB_ISSUE_SCRIPT, ["parent", String(issueNumber)], {
+      env: ARCHITECT_EXEC_ENV,
+      timeout: 15_000,
+    });
+    const parsed = JSON.parse(stdout.trim() || "null");
+    return parsed && parsed.number ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+async function getSubIssueSummary(issueNumber) {
+  if (!issueNumber || !fs.existsSync(SUB_ISSUE_SCRIPT)) {
+    return { total: 0, completed: 0, percent_completed: 0 };
+  }
+  try {
+    const { stdout } = await execFileAsync(SUB_ISSUE_SCRIPT, ["summary", String(issueNumber)], {
+      env: ARCHITECT_EXEC_ENV,
+      timeout: 15_000,
+    });
+    return JSON.parse(stdout.trim() || "{}");
+  } catch {
+    return { total: 0, completed: 0, percent_completed: 0 };
+  }
+}
+
+async function inspectPrMeta(prNumber, headBranch = "") {
+  try {
+    const { stdout } = await ghAsArchitect([
+      "pr",
+      "view",
+      String(prNumber),
+      "--json",
+      "body,labels,mergeable,mergeStateStatus,headRefName,baseRefName,statusCheckRollup",
+    ]);
+    const pr = JSON.parse(stdout);
+    const labels = (pr.labels || []).map((l) => l.name);
+    const checks = pr.statusCheckRollup || [];
+    const gateCheck = checks.find((c) => (c.name || c.context) === "human-gate-guard");
+    const gateState = gateCheck
+      ? String(gateCheck.conclusion || gateCheck.state || gateCheck.status || "").toUpperCase()
+      : "UNKNOWN";
+    const humanGateBlocked = gateCheck ? gateState !== "SUCCESS" : false;
+
+    return {
+      linkedIssue: extractLinkedIssue(pr.body, pr.headRefName || headBranch),
+      labels,
+      hasFableEscalated: labels.includes("fable-escalated"),
+      hasHumanGateLabel: labels.includes("human-gate"),
+      humanGateBlocked,
+      isConflicting: pr.mergeable === "CONFLICTING" || pr.mergeStateStatus === "DIRTY",
+      headRefName: pr.headRefName || headBranch,
+      baseRefName: pr.baseRefName || "",
+    };
+  } catch {
+    return {
+      linkedIssue: extractLinkedIssue("", headBranch),
+      labels: [],
+      hasFableEscalated: false,
+      hasHumanGateLabel: false,
+      humanGateBlocked: false,
+      isConflicting: false,
+      headRefName: headBranch,
+      baseRefName: "",
+    };
+  }
+}
+
+function writeJsonAtomic(filePath, data) {
+  const dir = path.dirname(filePath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const tmp = `${filePath}.tmp.${process.pid}`;
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2), "utf8");
+  fs.renameSync(tmp, filePath);
+}
+
+function loadRetryState() {
+  try {
+    if (fs.existsSync(RETRY_STATE_FILE)) {
+      return JSON.parse(fs.readFileSync(RETRY_STATE_FILE, "utf8"));
+    }
+  } catch {}
+  return { prRetries: {}, stallAlerts: {}, processedDeliveries: [] };
+}
+
+function saveRetryState(state) {
+  writeJsonAtomic(RETRY_STATE_FILE, state);
+}
+
+function loadQueueFromDisk() {
+  try {
+    if (fs.existsSync(QUEUE_STATE_FILE)) {
+      const q = JSON.parse(fs.readFileSync(QUEUE_STATE_FILE, "utf8"));
+      if (Array.isArray(q)) return q;
+    }
+  } catch {}
+  return [];
+}
+
+function saveQueueToDisk() {
+  writeJsonAtomic(QUEUE_STATE_FILE, queue);
+}
+
+const queue = loadQueueFromDisk();
+const pendingComments = new Map();
+let processing = false;
+let currentItemSummary = null;
+
+function sortQueue() {
+  queue.sort((a, b) => {
+    if (a.priority !== b.priority) return a.priority - b.priority;
+    return a.queuedAt - b.queuedAt;
+  });
+}
+
+function enqueueArchitectPrompt(promptText, opts = {}) {
+  const item = {
+    id: `turn_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    priority: opts.priority ?? PRIORITY.REVIEW_WAVE,
+    kind: opts.kind || "general",
+    threadKey: opts.threadKey || null,
+    prompt: promptText,
+    queuedAt: Date.now(),
+  };
+
+  queue.push(item);
+  sortQueue();
+  saveQueueToDisk();
+  console.log(`[bridge] Enqueued turn ${item.id} [${item.kind}, prio=${item.priority}] (queue size: ${queue.length}).`);
+  drainQueue();
+}
+
+async function sendAndWaitArchitectTurn(promptText) {
+  await execFileAsync(
+    "herdr",
+    [
+      "agent",
+      "prompt",
+      ARCHITECT_PANE,
+      promptText,
+      "--wait",
+      "--until",
+      "idle",
+      "--until",
+      "done",
+      "--timeout",
+      String(ARCHITECT_WAIT_TIMEOUT_MS),
+    ],
+    { timeout: ARCHITECT_WAIT_TIMEOUT_MS + 5_000 }
+  );
+  return { delivered: true };
+}
+
+async function drainQueue() {
+  if (processing) return;
+  processing = true;
+
+  try {
+    while (queue.length > 0) {
+      sortQueue();
+      const next = queue[0];
+      currentItemSummary = `${next.kind}${next.threadKey ? ` (${next.threadKey})` : ""}`;
+      try {
+        await sendAndWaitArchitectTurn(next.prompt);
+        queue.shift();
+        saveQueueToDisk();
+      } catch (err) {
+        console.error(`[bridge] Turn failed on ${currentItemSummary}:`, err.message);
+        break;
+      }
+    }
+  } finally {
+    currentItemSummary = null;
+    processing = false;
+    if (queue.length > 0) setTimeout(drainQueue, 5000);
+  }
+}
+
+function verifySignature(rawBody, sigHeader) {
+  if (!SECRET) return true;
+  if (!sigHeader) return false;
+  const hmac = crypto.createHmac("sha256", SECRET);
+  hmac.update(rawBody);
+  const digest = `sha256=${hmac.digest("hex")}`;
+  try {
+    return crypto.timingSafeEqual(Buffer.from(digest), Buffer.from(sigHeader));
+  } catch {
+    return false;
+  }
+}
+
+async function handleEvent(event, payload) {
+  // 1. Issue labeled plan -> sync workspace & wake architect
+  if (event === "issues" && payload.action === "labeled" && payload.label?.name === "plan") {
+    const issue = payload.issue;
+    await syncHubWorkspace();
+    await syncBoardField(issue.number, "Status", "Backlog");
+
+    enqueueArchitectPrompt(
+      [
+        `[GITHUB EVENT: PLAN REQUEST] Issue #${issue.number} ("${issue.title}") was labeled "plan".`,
+        `Decompose this feature into atomic Sub-Issues with Test Plans, link them via .factory/sub-issue.sh, post your Wave Blueprint, and stop.`,
+      ].join("\n"),
+      { priority: PRIORITY.PLAN_READY, kind: "plan_request", threadKey: `issue:${issue.number}` }
+    );
+    return;
+  }
+
+  // 2. Issue labeled ready -> claim & dispatch wave
+  if (event === "issues" && payload.action === "labeled" && payload.label?.name === "ready") {
+    const issue = payload.issue;
+    await syncHubWorkspace();
+    await syncBoardField(issue.number, "Status", "In Progress");
+
+    enqueueArchitectPrompt(
+      [
+        `[GITHUB EVENT: READY FOR EXECUTION] Issue #${issue.number} ("${issue.title}") was approved and labeled "ready".`,
+        `Inspect herdr agent list and dispatch Wave 1 atomic Sub-Issues to idle workers.`,
+      ].join("\n"),
+      { priority: PRIORITY.PLAN_READY, kind: "ready_dispatch", threadKey: `issue:${issue.number}` }
+    );
+    return;
+  }
+
+  // 3. Human comments (Fix B1: only authorized humans; Fix D4: quote-replies accepted)
+  if (
+    (event === "issue_comment" || event === "pull_request_review_comment") &&
+    payload.action === "created"
+  ) {
+    const comment = payload.comment;
+    if (isAgentOrBotComment(payload.sender)) return;
+    if (!isAuthorizedHuman(comment.author_association, payload.sender)) {
+      console.log(`[bridge] Ignored comment from untrusted user @${comment.user?.login} (author_association=${comment.author_association}).`);
+      return;
+    }
+
+    const isPR = Boolean(payload.issue?.pull_request || payload.pull_request);
+    const num = (payload.issue || payload.pull_request).number;
+
+    enqueueArchitectPrompt(
+      [
+        `[GITHUB EVENT: HUMAN FEEDBACK] @${comment.user.login} commented on ${isPR ? "PR" : "Issue"} #${num}:`,
+        `"${comment.body}"`,
+      ].join("\n"),
+      { priority: PRIORITY.HUMAN_COMMENT, kind: "human_comment", threadKey: `${isPR ? "pr" : "issue"}:${num}` }
+    );
+    return;
+  }
+
+  // 4. Human Review submitted (Fix D5)
+  if (event === "pull_request_review" && payload.action === "submitted") {
+    const review = payload.review;
+    if (isAgentOrBotComment(payload.sender)) return;
+    if (!isAuthorizedHuman(review.author_association, payload.sender)) return;
+    if (!review.body && review.state !== "CHANGES_REQUESTED") return;
+
+    const prNum = payload.pull_request.number;
+    enqueueArchitectPrompt(
+      [
+        `[GITHUB EVENT: HUMAN PR REVIEW (${review.state})] @${review.user.login} reviewed PR #${prNum}:`,
+        review.body ? `"${review.body}"` : "(No review body text; status changed)",
+      ].join("\n"),
+      { priority: PRIORITY.HUMAN_COMMENT, kind: "human_review", threadKey: `pr:${prNum}` }
+    );
+    return;
+  }
+
+  // 5. PR Merged into staging -> Deterministic completion & release (Claude E1 recommendation)
+  if (
+    event === "pull_request" &&
+    payload.action === "closed" &&
+    payload.pull_request?.merged === true &&
+    payload.pull_request?.base?.ref === "staging"
+  ) {
+    const pr = payload.pull_request;
+    await syncHubWorkspace();
+    const linkedIssue = extractLinkedIssue(pr.body, pr.head?.ref);
+    if (!linkedIssue) return;
+
+    await syncBoardField(linkedIssue, "Status", "Done");
+    const parentEpic = await getParentEpic(linkedIssue);
+    if (!parentEpic) return;
+
+    const summary = await getSubIssueSummary(parentEpic.number);
+    if (summary.total > 0 && summary.completed >= summary.total) {
+      console.log(`[bridge] Epic #${parentEpic.number} 100% complete (${summary.completed}/${summary.total}). Deterministically closing & opening Release PR.`);
+      await ghAsArchitect(["issue", "close", String(parentEpic.number)]).catch(() => {});
+      if (fs.existsSync(RELEASE_PR_SCRIPT)) {
+        await execFileAsync(RELEASE_PR_SCRIPT, [String(parentEpic.number)], { env: ARCHITECT_EXEC_ENV }).catch(() => {});
+      }
+    } else {
+      enqueueArchitectPrompt(
+        `[GITHUB EVENT: SUB-ISSUE MERGED] PR #${pr.number} (Sub-Issue #${linkedIssue}) merged to staging. Parent Epic #${parentEpic.number} progress: ${summary.completed}/${summary.total}. Dispatch next unblocked sub-issues.`,
+        { priority: PRIORITY.REVIEW_WAVE, kind: "wave_check", threadKey: `issue:${parentEpic.number}` }
+      );
+    }
+    return;
+  }
+
+  // 6. Workflow run completed
+  if (event === "workflow_run" && payload.action === "completed") {
+    const run = payload.workflow_run;
+    if (run.name !== CI_WORKFLOW_NAME) return;
+
+    if (run.event === "push" && run.head_branch === "staging") {
+      if (run.conclusion === "failure") {
+        await syncHubWorkspace();
+        enqueueArchitectPrompt(
+          `[GITHUB EVENT: STAGING BROKEN — POST-MERGE CI FAILED] Run #${run.id} FAILED on staging. PAUSE merges and dispatch hotfix.`,
+          { priority: PRIORITY.CI_URGENT, kind: "staging_broken", threadKey: "branch:staging" }
+        );
+      }
+      return;
+    }
+
+    const prs = run.pull_requests || [];
+    if (prs.length === 0) return;
+    const prNumber = prs[0].number;
+    const prMeta = await inspectPrMeta(prNumber, run.head_branch);
+
+    if (run.conclusion === "failure") {
+      enqueueArchitectPrompt(
+        `[GITHUB EVENT: CI FAILED] PR #${prNumber} failed CI run #${run.id}. Dispatch fix to assigned worker.`,
+        { priority: PRIORITY.CI_URGENT, kind: "ci_failed", threadKey: `pr:${prNumber}` }
+      );
+    } else if (run.conclusion === "success") {
+      if (prMeta.humanGateBlocked || prMeta.hasHumanGateLabel) {
+        await surfaceAwaitingApproval(prNumber, prMeta.linkedIssue, prMeta.baseRefName === "master");
+        enqueueArchitectPrompt(
+          `[GITHUB EVENT: CI PASSED — GATED] PR #${prNumber} passed CI, moved to Awaiting Approval. Post review summary and STOP.`,
+          { priority: PRIORITY.REVIEW_WAVE, kind: "ci_gated", threadKey: `pr:${prNumber}` }
+        );
+      } else {
+        if (prMeta.linkedIssue) await syncBoardField(prMeta.linkedIssue, "Status", "In Review");
+        enqueueArchitectPrompt(
+          `[GITHUB EVENT: CI PASSED] PR #${prNumber} passed CI with no protected path locks. Review and squash-merge to staging.`,
+          { priority: PRIORITY.REVIEW_WAVE, kind: "ci_passed", threadKey: `pr:${prNumber}` }
+        );
+      }
+    }
+  }
+}
+
+// Reconciliation scan on startup (Fix D2)
+async function reconcileStartupState() {
+  try {
+    console.log("[bridge] Running startup reconciliation scan against GitHub...");
+    const { stdout: openPrsOut } = await ghAsArchitect(["pr", "list", "--state", "open", "--base", "staging", "--json", "number,headRefName"]);
+    const openPrs = JSON.parse(openPrsOut || "[]");
+    console.log(`[bridge] Reconciled ${openPrs.length} open staging PR(s).`);
+  } catch (err) {
+    console.warn("[bridge] Non-fatal reconciliation scan warning:", err.message);
+  }
+}
+
+const server = http.createServer((req, res) => {
+  if (req.method === "GET" && req.url === "/health") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true, reviewer: HUMAN_REVIEWER, queued: queue.length }));
+    return;
+  }
+
+  if (req.method !== "POST" || !req.url?.startsWith("/webhook")) {
+    res.writeHead(404);
+    res.end();
+    return;
+  }
+
+  const chunks = [];
+  req.on("data", (c) => chunks.push(c));
+  req.on("end", () => {
+    const raw = Buffer.concat(chunks);
+    if (!verifySignature(raw, req.headers["x-hub-signature-256"])) {
+      res.writeHead(401);
+      res.end("Invalid signature");
+      return;
+    }
+
+    const event = req.headers["x-github-event"];
+    let payload;
+    try {
+      payload = JSON.parse(raw.toString("utf8"));
+    } catch {
+      res.writeHead(400);
+      res.end("Invalid JSON");
+      return;
+    }
+
+    res.writeHead(202, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ received: event }));
+
+    handleEvent(event, payload).catch((err) => console.error("[bridge] Event error:", err));
+  });
+});
+
+server.listen(PORT, BIND_HOST, () => {
+  console.log(`[bridge] Listening on :${PORT} | Architect: ${ARCHITECT_PANE} | Human Reviewer: @${HUMAN_REVIEWER || "unset"}`);
+  if (queue.length > 0) drainQueue();
+  reconcileStartupState();
+});

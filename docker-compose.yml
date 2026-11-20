@@ -1,0 +1,267 @@
+name: herdr-software-factory
+
+networks:
+  factory-net:
+    driver: bridge
+  llm-net:
+    driver: bridge
+  db-net:
+    driver: bridge
+    internal: true
+
+x-security-hardening: &security-hardening
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  restart: unless-stopped
+
+services:
+  # 1. 1-Hour GitHub Token Minter (Uses Dockerfile.minter to fix A2 volume permissions)
+  auth-minter:
+    build:
+      context: .
+      dockerfile: .factory/docker/Dockerfile.minter
+    container_name: herdr-auth-minter
+    <<: *security-hardening
+    networks:
+      - factory-net
+    volumes:
+      - ./.factory/token-refresher.mjs:/opt/factory/token-refresher.mjs:ro
+      - ${HOME}/.config/light-factory/apps.env:/run/factory-config/apps.env:ro
+      - ${HOME}/.config/light-factory/keys:/run/factory-keys:ro
+      - auth-architect:/run/factory-auth/architect
+      - auth-worker:/run/factory-auth/worker
+    environment:
+      FACTORY_APPS_ENV: /run/factory-config/apps.env
+      FACTORY_AUTH_ROOT: /run/factory-auth
+    healthcheck:
+      test: ["CMD-SHELL", "test -s /run/factory-auth/architect/token && test -s /run/factory-auth/worker/token"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  # 2. Zero-Key LLM Proxy Sidecar
+  llm-proxy:
+    image: node:22-bookworm-slim
+    container_name: herdr-llm-proxy
+    <<: *security-hardening
+    networks:
+      - llm-net
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    user: "${FACTORY_UID:-1000}:${FACTORY_GID:-1000}"
+    command: ["node", "/opt/factory/llm-proxy.mjs"]
+    environment:
+      LLM_SECRETS_FILE: /run/factory-config/llm-secrets.env
+      LLM_PROXY_PORT: "4000"
+      ARCHITECT_MODEL: ${ARCHITECT_MODEL:-glm-5.3}
+      ARCHITECT_VISION_MODEL: ${ARCHITECT_VISION_MODEL:-glm-5.3-flash}
+      EXTRA_ALLOWED_MODELS: ${EXTRA_ALLOWED_MODELS:-}
+      ARCHITECT_PROXY_TOKEN: ${ARCHITECT_PROXY_TOKEN:-proxy-architect-only}
+      FABLE_PROXY_TOKEN: ${FABLE_PROXY_TOKEN:-proxy-fable-only}
+    volumes:
+      - ./.factory/llm-proxy.mjs:/opt/factory/llm-proxy.mjs:ro
+      - ${HOME}/.config/light-factory/llm-secrets.env:/run/factory-config/llm-secrets.env:ro
+    healthcheck:
+      test: ["CMD-SHELL", "node -e 'fetch(\"http://127.0.0.1:4000/health\").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))'"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # 3. Isolated Multi-Worker Postgres
+  factory-postgres:
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
+    container_name: herdr-factory-postgres
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - db-net
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD}
+      POSTGRES_DB: postgres
+      POSTGRES_GEMINI_PASSWORD: ${POSTGRES_GEMINI_PASSWORD}
+      POSTGRES_QWEN_PASSWORD: ${POSTGRES_QWEN_PASSWORD}
+      POSTGRES_FABLE_PASSWORD: ${POSTGRES_FABLE_PASSWORD}
+    volumes:
+      - ./.factory/postgres/init-dbs.sh:/docker-entrypoint-initdb.d/01-init-dbs.sh:ro
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    mem_limit: 2g
+    cpus: "2.0"
+
+  # 4. Orchestrator Hub (Herdr + Architect)
+  herdr-hub:
+    build:
+      context: .
+      dockerfile: .factory/docker/Dockerfile.hub
+      args:
+        FACTORY_UID: "${FACTORY_UID:-1000}"
+        FACTORY_GID: "${FACTORY_GID:-1000}"
+    container_name: herdr-hub
+    <<: *security-hardening
+    networks:
+      - factory-net
+      - llm-net
+    ports:
+      - "127.0.0.1:${WEBHOOK_PORT:-8787}:8787"
+    environment:
+      FACTORY_ROLE: architect
+      FACTORY_REPO: ${FACTORY_REPO}
+      FACTORY_AUTH_ROOT: /run/factory-auth
+      BRIDGE_ENV_FILE: /run/factory-config/bridge.env
+      ARCHITECT_MODEL: ${ARCHITECT_MODEL:-glm-5.3}
+      ARCHITECT_VISION_MODEL: ${ARCHITECT_VISION_MODEL:-glm-5.3-flash}
+      ARCHITECT_PROXY_TOKEN: ${ARCHITECT_PROXY_TOKEN:-proxy-architect-only}
+      FABLE_MODEL: ${FABLE_MODEL:-}
+    volumes:
+      - auth-architect:/run/factory-auth/architect:ro
+      - ${HOME}/.config/light-factory/bridge.env:/run/factory-config/bridge.env:ro
+      - ${HOME}/.config/light-factory/internal-ssh/id_ed25519:/run/factory-ssh/id_ed25519:ro
+      - hub-workspace:/workspace
+      - hub-hermes:/home/factory/.hermes
+      - hub-herdr:/home/factory/.config/herdr
+    depends_on:
+      auth-minter:
+        condition: service_healthy
+      llm-proxy:
+        condition: service_healthy
+    mem_limit: 4g
+    cpus: "2.0"
+
+  # 5. Primary Worker (Gemini 3.8 Flash via Antigravity CLI)
+  worker-gemini:
+    build:
+      context: .
+      dockerfile: .factory/docker/Dockerfile.worker
+      args:
+        FACTORY_UID: "${FACTORY_UID:-1000}"
+        FACTORY_GID: "${FACTORY_GID:-1000}"
+    container_name: herdr-worker-gemini
+    <<: *security-hardening
+    networks:
+      - factory-net
+      - db-net
+    environment:
+      WORKER_NAME: worker-gemini
+      FACTORY_ROLE: worker
+      FACTORY_AUTH_ROOT: /run/factory-auth
+      FACTORY_REPO: ${FACTORY_REPO}
+      DATABASE_URL: "postgres://worker_gemini:${POSTGRES_GEMINI_PASSWORD}@factory-postgres:5432/app_gemini"
+    volumes:
+      - auth-worker:/run/factory-auth/worker:ro
+      - ${HOME}/.config/light-factory/internal-ssh/authorized_keys:/run/factory-ssh/authorized_keys:ro
+      - gemini-workspace:/workspace
+      - gemini-auth:/home/factory/.config
+      - gemini-dotgemini:/home/factory/.gemini
+    depends_on:
+      auth-minter:
+        condition: service_healthy
+      factory-postgres:
+        condition: service_healthy
+    mem_limit: 8g
+    cpus: "4.0"
+
+  # 6. Parallel Worker (Qwen 3.8 27B via Local Inference Server)
+  worker-qwen:
+    build:
+      context: .
+      dockerfile: .factory/docker/Dockerfile.worker
+      args:
+        FACTORY_UID: "${FACTORY_UID:-1000}"
+        FACTORY_GID: "${FACTORY_GID:-1000}"
+    container_name: herdr-worker-qwen
+    <<: *security-hardening
+    networks:
+      - factory-net
+      - db-net
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      WORKER_NAME: worker-qwen
+      FACTORY_ROLE: worker
+      FACTORY_AUTH_ROOT: /run/factory-auth
+      FACTORY_REPO: ${FACTORY_REPO}
+      DATABASE_URL: "postgres://worker_qwen:${POSTGRES_QWEN_PASSWORD}@factory-postgres:5432/app_qwen"
+      QWEN_INFERENCE_URL: ${QWEN_INFERENCE_URL:-http://host.docker.internal:11434/v1}
+      QWEN_MODEL: ${QWEN_MODEL:-qwen3.8:27b}
+      QWEN_API_KEY: ${QWEN_API_KEY:-local-not-needed}
+    volumes:
+      - auth-worker:/run/factory-auth/worker:ro
+      - ${HOME}/.config/light-factory/internal-ssh/authorized_keys:/run/factory-ssh/authorized_keys:ro
+      - qwen-workspace:/workspace
+      - qwen-hermes:/home/factory/.hermes
+    depends_on:
+      auth-minter:
+        condition: service_healthy
+      factory-postgres:
+        condition: service_healthy
+    mem_limit: 8g
+    cpus: "4.0"
+
+  # 7. Escalation Specialist (Claude Code — IDLE 95%)
+  specialist-fable:
+    build:
+      context: .
+      dockerfile: .factory/docker/Dockerfile.worker
+      args:
+        FACTORY_UID: "${FACTORY_UID:-1000}"
+        FACTORY_GID: "${FACTORY_GID:-1000}"
+    container_name: herdr-specialist-fable
+    <<: *security-hardening
+    networks:
+      - factory-net
+      - llm-net
+      - db-net
+    environment:
+      WORKER_NAME: specialist-fable
+      FACTORY_ROLE: worker
+      FACTORY_AUTH_ROOT: /run/factory-auth
+      FACTORY_REPO: ${FACTORY_REPO}
+      DATABASE_URL: "postgres://worker_fable:${POSTGRES_FABLE_PASSWORD}@factory-postgres:5432/app_fable"
+      FABLE_AUTH_MODE: ${FABLE_AUTH_MODE:-oauth}
+      FABLE_MODEL: ${FABLE_MODEL:-}
+      FABLE_PROXY_TOKEN: ${FABLE_PROXY_TOKEN:-proxy-fable-only}
+    volumes:
+      - auth-worker:/run/factory-auth/worker:ro
+      - ${HOME}/.config/light-factory/internal-ssh/authorized_keys:/run/factory-ssh/authorized_keys:ro
+      - fable-workspace:/workspace
+      - fable-auth:/home/factory/.claude
+    depends_on:
+      auth-minter:
+        condition: service_healthy
+      llm-proxy:
+        condition: service_healthy
+      factory-postgres:
+        condition: service_healthy
+    mem_limit: 8g
+    cpus: "4.0"
+
+volumes:
+  auth-architect:
+  auth-worker:
+  postgres-data:
+  hub-workspace:
+  hub-hermes:
+  hub-herdr:
+  gemini-workspace:
+  gemini-auth:
+  gemini-dotgemini:
+  qwen-workspace:
+  qwen-hermes:
+  fable-workspace:
+  fable-auth:

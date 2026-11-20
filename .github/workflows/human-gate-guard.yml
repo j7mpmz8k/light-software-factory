@@ -1,0 +1,162 @@
+name: Human Gate Guard
+
+on:
+  pull_request_target:
+    branches: [staging, master]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  pull_request_review:
+    types: [submitted, dismissed]
+
+permissions:
+  contents: read
+  pull-requests: read
+  statuses: write
+
+concurrency:
+  group: human-gate-guard-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  evaluate-human-gate:
+    if: github.event.pull_request.base.ref == 'staging' || github.event.pull_request.base.ref == 'master'
+    runs-on: ubuntu-latest
+    env:
+      HUMAN_APPROVERS: "<YOUR_GITHUB_USERNAME>"
+    steps:
+      - name: Evaluate Human Gate Status
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const prNumber = pr.number;
+            const headSha = pr.head.sha;
+            const author = (pr.user?.login || "").toLowerCase();
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+
+            async function setGuardStatus(state, description) {
+              const safeDesc = String(description).replace(/\s+/g, " ").trim().slice(0, 140);
+              await github.rest.repos.createCommitStatus({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                sha: headSha,
+                state,
+                context: "human-gate-guard",
+                description: safeDesc,
+                target_url: runUrl,
+              });
+              core.info(`[human-gate-guard] Published status on ${headSha.slice(0, 7)}: ${state} — ${safeDesc}`);
+            }
+
+            const approvers = (process.env.HUMAN_APPROVERS || "")
+              .split(",")
+              .map((s) => s.trim().toLowerCase())
+              .filter(Boolean);
+
+            if (approvers.length === 0 || approvers[0].includes("<your_github_username>")) {
+              await setGuardStatus("failure", "HUMAN_APPROVERS is not configured in human-gate-guard.yml");
+              core.setFailed("HUMAN_APPROVERS is not configured in .github/workflows/human-gate-guard.yml");
+              return;
+            }
+
+            if (approvers.includes(author)) {
+              await setGuardStatus("success", `Cleared: PR #${prNumber} authored by human approver @${author}.`);
+              return;
+            }
+
+            // Fix B2: Verify unlabel event sender was an authorized human
+            if (context.eventName === "pull_request_target" && context.payload.action === "unlabeled" && context.payload.label?.name === "human-gate") {
+              const unlabeler = (context.payload.sender?.login || "").toLowerCase();
+              if (!approvers.includes(unlabeler)) {
+                await setGuardStatus("failure", `Tamper detected: @${unlabeler} unauthorized to remove human-gate.`);
+                core.setFailed(`Unauthorized unlabel by @${unlabeler}`);
+                return;
+              }
+            }
+
+            // Fix B3 & B4: Comprehensive protected patterns
+            const PROTECTED_PATTERNS = [
+              /(^|\/)(migrations?|prisma|drizzle|alembic)(\/|$)/i,
+              /\.sql$/i,
+              /(^|\/)(auth|security|rbac|permissions?)(\/|$)/i,
+              /^\.github\//,
+              /^\.factory\//,
+              /(^|\/)\.agents\//,
+              /(^|\/)(docker-)?compose[^/]*\.ya?ml$/i,
+              /^AGENTS\.md$/,
+              /^DECISIONS\.md$/,
+              /(^|\/)\.env/i,
+              /^package\.json$/,
+              /^package-lock\.json$/,
+              /^pnpm-lock\.yaml$/,
+              /^yarn\.lock$/,
+              /^playwright\.config\.[a-z0-9]+$/i,
+              /^tsconfig.*\.json$/i,
+              /^\.npmrc$/,
+              /(^|\/)Dockerfile/i,
+            ];
+
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+              per_page: 100,
+            });
+
+            // Fix B4: Fail-closed if PR files exceed GitHub 3,000 file cap
+            if (pr.changed_files > files.length) {
+              await setGuardStatus("failure", `PR exceeds 3000 files (${pr.changed_files} changed); human review required.`);
+              return;
+            }
+
+            // Fix B4: Check both current filename and previous_filename for renames
+            const protectedHits = files
+              .filter((f) => PROTECTED_PATTERNS.some((re) => re.test(f.filename) || (f.previous_filename && re.test(f.previous_filename))))
+              .map((f) => f.filename);
+
+            const labels = (pr.labels || []).map((l) => l.name);
+            const hasHumanGateLabel = labels.includes("human-gate");
+            const targetsMaster = pr.base.ref === "master";
+
+            const reasons = [];
+            if (targetsMaster) reasons.push("target=master");
+            if (hasHumanGateLabel) reasons.push("label=human-gate");
+            if (protectedHits.length > 0) {
+              reasons.push(`protected paths: ${protectedHits.slice(0, 3).join(", ")}${protectedHits.length > 3 ? " (+more)" : ""}`);
+            }
+
+            if (reasons.length === 0) {
+              await setGuardStatus("success", "Cleared: routine paths only.");
+              return;
+            }
+
+            const reviews = await github.paginate(github.rest.pulls.listReviews, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+              per_page: 100,
+            });
+
+            const latestByHuman = new Map();
+            for (const r of reviews) {
+              const login = (r.user?.login || "").toLowerCase();
+              if (!approvers.includes(login)) continue;
+              if (r.state === "COMMENTED") continue;
+              latestByHuman.set(login, r);
+            }
+
+            const validApproval = [...latestByHuman.values()].find(
+              (r) => r.state === "APPROVED" && (r.commit_id || "").toLowerCase() === headSha.toLowerCase()
+            );
+
+            if (validApproval) {
+              await setGuardStatus(
+                "success",
+                `Unlocked by @${validApproval.user.login} approval on commit ${headSha.slice(0, 7)}.`
+              );
+              return;
+            }
+
+            await setGuardStatus(
+              "failure",
+              `Awaiting @${approvers.join("/@")} approval (${reasons.join("; ")})`
+            );

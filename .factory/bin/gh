@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CLEAN_PATH="$(printf '%s' "$PATH" | tr ':' '\n' | grep -Fxv "$SCRIPT_DIR" | paste -sd ':' -)"
+REAL_GH="$(PATH="$CLEAN_PATH" command -v gh)"
+
+ROLE="${FACTORY_ROLE:-}"
+AUTH_ROOT="${FACTORY_AUTH_ROOT:-/run/factory-auth}"
+
+if [ -n "$ROLE" ]; then
+  TOKEN_FILE="${AUTH_ROOT}/${ROLE}/token"
+  if [ ! -r "$TOKEN_FILE" ]; then
+    echo "[factory-gh] ERROR: Missing 1h token for role '${ROLE}' at ${TOKEN_FILE}. Is auth-minter running?" >&2
+    exit 1
+  fi
+  export GH_TOKEN="$(cat "$TOKEN_FILE")"
+  export GH_CONFIG_DIR="/tmp/factory-gh-config-${ROLE}"
+  mkdir -p "$GH_CONFIG_DIR"
+fi
+
+exec "$REAL_GH" "$@"

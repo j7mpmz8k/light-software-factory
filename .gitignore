@@ -1,0 +1,11 @@
+# Light Software Factory local runtime state & secrets
+.factory/.env
+.factory/*.env
+*.env
+*.env*
+.factory/retry-state.json
+.factory/architect-queue.json
+.factory/bridge.log
+*.pem
+playwright-report/
+test-results/

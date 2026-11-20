@@ -1,0 +1,124 @@
+name: CI & PR Evidence
+
+on:
+  pull_request:
+    branches: [staging, master]
+  push:
+    branches: [staging]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: ci-evidence-${{ github.event_name }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  ci-and-evidence:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: ci_user
+          POSTGRES_PASSWORD: ci_password
+          POSTGRES_DB: app_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://ci_user:ci_password@localhost:5432/app_ci
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Database Migrations (Clean-Room Check)
+        run: npm run db:migrate --if-present
+
+      - name: Lint
+        run: npm run lint --if-present
+
+      - name: Typecheck
+        run: npm run typecheck --if-present
+
+      - name: Unit & Integration Tests (Full Suite)
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Install Playwright & Run Full E2E Suite + Visual Evidence
+        if: hashFiles('playwright.config.*') != ''
+        run: |
+          npx playwright install --with-deps chromium
+          npx playwright test --reporter=list
+        continue-on-error: false
+
+      - name: Upload Playwright Screenshots & Report
+        if: always() && github.event_name == 'pull_request' && hashFiles('playwright-report/index.html', 'test-results/**') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-${{ github.event.pull_request.number }}-evidence
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 14
+
+      - name: Post or Update PR Evidence Summary
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const marker = "<!-- factory-ci-evidence -->";
+            const prNumber = context.payload.pull_request.number;
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const status = "${{ job.status }}";
+            const icon = status === "success" ? "✅" : "❌";
+
+            const body = [
+              marker,
+              `### ${icon} Factory CI & Visual Evidence`,
+              `- **Commit:** \`${context.payload.pull_request.head.sha.slice(0, 7)}\``,
+              `- **CI Status:** \`${status}\` (Clean-room Postgres 16 verified)`,
+              `- **Workflow Run & Artifacts:** [Inspect Run #${context.runId}](${runUrl})`,
+            ].join("\n");
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              per_page: 100
+            });
+
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body
+              });
+            }

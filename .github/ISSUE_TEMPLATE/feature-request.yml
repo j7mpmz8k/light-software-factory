@@ -1,0 +1,37 @@
+name: Feature Request
+description: Propose a new feature or rough idea (apply `plan` so the Architect breaks it into Sub-Issues before coding)
+title: "[FEATURE] "
+labels: []
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / Goal
+      description: What user problem does this solve or what capability are we adding? Rough ideas are totally fine — apply the `plan` label to have the Architect spec out exact Sub-Issues first.
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Desired Behavior & Acceptance Criteria
+      description: Bullet list of what "done" looks like (even if high-level).
+      placeholder: |
+        - [ ] User can...
+        - [ ] Edge case handled...
+    validations:
+      required: true
+  - type: dropdown
+    id: review_gate
+    attributes:
+      label: Extra Human Gate? (Optional)
+      description: Protected paths (`migrations/`, `*.sql`, `auth/`, `.github/`, `.factory/`, `docker-compose*.yml`, `AGENTS.md`) are ALWAYS auto-gated by `human-gate-guard` and moved to `Awaiting Approval`. Select `human-gate` only if you also want manual approval on normal files.
+      options:
+        - Default (Routine files flow to staging; protected paths auto-gated)
+        - Manual Override (Add `human-gate` label for my explicit approval before staging merge)
+    validations:
+      required: false
+  - type: textarea
+    id: notes
+    attributes:
+      label: Out of Scope / Extra Notes
+      description: Anything the agents should explicitly avoid touching.
