@@ -24,14 +24,15 @@ Each worker container is reached from `herdr-hub` over private `factory-net` via
 - Zero `docker.sock` exposure to any AI container.
 
 ### Model Roster (Option B — Unthrottled Architect + Subscription/Local Workers + Claude Code Escalation)
-- **🧠 Architect (`architect` tab inside `herdr-hub`):** **GLM-5.3** inside **Hermes** (`hermes --profile architect`) with `auxiliary.vision` routed to **GLM-5.3-Flash** for inspecting Playwright screenshots downloaded locally via `.factory/fetch-evidence.sh`. Stays **execution-free** (no app builds, no direct Postgres access) so `herdr-hub` credentials stay shielded from untrusted branch code, while `.factory/sync-hub.sh` keeps `/workspace` synced with `origin/staging` before planning and rule commits. All LLM calls flow through `llm-proxy` (which also exposes `GET /stats` for proxied request & token telemetry).
-- **🚦 Turn-Serialized Priority Queue, Comment Coalescer & Stall Watchdog (`bridge` tab inside `herdr-hub`):** `webhook-bridge.mjs` persists pending GitHub events to disk (inside the `hub-herdr` volume), prioritizes **human comments** ahead of queued background CI/`plan` webhooks, bundles rapid comments on the **same** Issue/PR thread within an 8-second debounce window (while keeping different threads strictly separate), waits on Herdr's native `idle`/`done` agent state before sending the next prompt, catches **post-merge `staging` CI regressions**, and runs a lightweight 15-minute watchdog alerting the Architect if an `in-progress` Sub-Issue stalls for >45 minutes without PR activity.
-- **🛠️ Primary Worker & Default E2E Writer (`worker-gemini` container -> `HERDR_AGENT=antigravity-cli`):** **Gemini 3.8 Flash** inside **Antigravity CLI (`agy`)**. Absorbs fast, high-volume multi-file coding, backend/API/DB integration work, edit-test-retry loops, and **Final-Wave Playwright E2E tests** (always in a fresh, stateless session, with Chromium system deps preinstalled) on your flat-rate Google AI Pro subscription, backed by its own locked-down Postgres DB (`app_gemini`) that resets cleanly between branches.
-- **🛠️ Parallel & Overflow Worker (`worker-qwen` container -> `HERDR_AGENT=hermes`):** **Local Qwen 3.8 27B** inside **Hermes** (`hermes --profile qwen`), reaching **only** your host GPU inference server via `host.docker.internal`, backed by its own locked-down Postgres DB (`app_qwen`). Handles UI, styling, unit tests, narrow 1–2 screen cross-model E2E flows (in a fresh session), and overflow if `worker-gemini` hits Antigravity's rolling quota.
-- **🔥 On-Demand Escalation (`specialist-fable` container -> `HERDR_AGENT=claude`):** Borrowed **Claude Fable** via **Claude Code (`claude`)** isolated strictly inside this container—idle 95% of the time and hard-capped at **1 pass per PR** for merge conflicts, 3-strike `blocked` rescues (including deeply flaky E2E rescues), and manual `human-gate` audits, backed by its own locked-down Postgres DB (`app_fable`). Never used for routine feature coding or routine E2E writing.
-- **🧩 Plan-First Decomposition, Final-Wave E2E & Rolling Release PR:** Rough or multi-step Issues labeled `plan` are inspected against a freshly synced `/workspace` and decomposed by the Architect into atomic **native GitHub Sub-Issues** (each with an explicit **Test Plan**, plus a **Final-Wave E2E Verification** Sub-Issue for multi-layer features) for a quick human sanity check before any code is written. Once approved (`ready`), the Architect checks **both** live `herdr agent list` states (`idle`/`done` vs. `working`/`blocked`) and `gh issue list --label in-progress` so no busy or blocked worker is ever double-assigned, dispatches strictly **1 unique Sub-Issue per idle worker container per PR**, and advances automatically across sequential/parallel dependency waves as PRs merge to `staging`. Whenever a parent Epic finishes on `staging`, the Architect automatically opens or updates **one rolling `staging -> master` Release PR** (via `.factory/release-pr.sh`), places it directly in the Kanban **`Awaiting Approval`** column, and requests your formal GitHub review so you can click **Approve** and merge via **"Create a merge commit"** (never squash) to production.
-- **🛡️ Single-Pane `Awaiting Approval` Board + Trusted-Branch `human-gate-guard`:** Routine PRs flow to `staging` without extra labels once `ci-and-evidence` and `human-gate-guard` pass (and post-merge `staging` CI immediately catches cross-PR logical regressions). `human-gate-guard.yml` executes via `pull_request_target` + `pull_request_review` (strictly from the trusted `master` branch, never checking out PR code) and posts an explicit commit status directly onto `pr.head.sha`. Any PR locked by `human-gate-guard` (protected paths, manual `human-gate` label, or rolling `staging -> master` Release PR) is automatically badged purple (`human-gate`), requests **you as a formal PR Reviewer**, and moves straight into the dedicated **`Awaiting Approval`** column on the Project Board—waiting for **you** to click **Approve** and **Merge**.
-- **📚 Progressive-Disclosure Skills (`.agents/skills/` & `.factory/role-skills/`):** Shared coding/domain skills (`modern-web-standards`, `postgres-migrations`, `e2e-testing`) are available on demand to **all** builders and reviewers without bloating Qwen's 54k context budget, while orchestration/rescue playbooks (including Herdr's bundled `herdr --skill`) are scoped strictly to Architect and Fable.
+- **🧠 Chief Architect (`architect` tab inside `herdr-hub`):** **GLM-5.3** inside **Hermes** (`hermes --profile architect`) with `auxiliary.vision` routed to **GLM-5.3-Flash**. Maintains **persistent conversational context** with the human developer across features, holds high-level system design, writes specs, strawman defaults, and enforces `GLOSSARY.md`. Can be losslessly checkpointed via Matt Pocock's `/handoff` skill. Stays **execution-free** (no app builds, no direct Postgres access) so `herdr-hub` credentials stay shielded from untrusted branch code, while `.factory/sync-hub.sh` keeps `/workspace` synced with `origin/staging` before planning and rule commits. All LLM calls flow through `llm-proxy` (which also exposes `GET /stats` for proxied request & token telemetry).
+- **🚦 Turn-Serialized Priority Queue, Comment Coalescer & Stall Watchdog (`bridge` tab inside `herdr-hub`):** `webhook-bridge.mjs` persists pending GitHub events to disk (inside the `hub-herdr` volume), prioritizes **human comments** ahead of queued background CI/`plan` webhooks, bundles rapid comments on the **same** Issue/PR thread within an 8-second debounce window (while keeping different threads strictly separate), routes human interaction to the Architect, routes execution/review events to the Orchestrator with pre-turn `/clear` context wipes, catches **post-merge `staging` CI regressions**, and runs a lightweight 15-minute watchdog alerting if an `in-progress` Sub-Issue stalls for >45 minutes.
+- **⚙️ Factory Orchestrator & Relief Worker (`senior-worker` tab inside `herdr-hub` -> `HERDR_AGENT=hermes`):** **Gemini 4 Neon** (or frontier API). Operates with **ephemeral context** (wiped via `/clear` before every wave planning or PR review turn). Takes approved specs, decomposes them into vertical tracer bullets (`to-tickets` / `sub-issue.sh`), dispatches workers via `.factory/dispatch-worker.sh` (with `/clear`), inspects PR diffs and Playwright screenshots with `pr-evidence-review`, and squash-merges to `staging`. Also acts as high-difficulty relief builder if needed.
+- **🛠️ Primary Worker & Default E2E Writer (`worker-gemini` container -> `HERDR_AGENT=antigravity-cli`):** **Gemini 3.8 Flash** inside **Antigravity CLI (`agy`)**. Runs in clean-on-dispatch stateless sessions, executes strict TDD (`tdd`), and writes Playwright E2E tests, backed by isolated Postgres DB (`app_gemini`).
+- **🛠️ Parallel & Overflow Worker (`worker-qwen` container -> `HERDR_AGENT=hermes`):** **Local Qwen 3.8 27B** inside **Hermes** (`hermes --profile qwen`), reaching host GPU inference server, backed by isolated Postgres DB (`app_qwen`). Runs in clean-on-dispatch stateless sessions for UI, styling, and overflow.
+- **🔥 On-Demand Escalation (`specialist-fable` container -> `HERDR_AGENT=claude`):** Borrowed **Claude Fable** via **Claude Code (`claude`)**—idle 95% of the time, hard-capped at 1 pass per PR for merge conflicts and 3-strike rescues, backed by isolated Postgres DB (`app_fable`).
+- **🧩 Plan-First Decomposition, Final-Wave E2E & Rolling Release PR:** Rough or multi-step Issues labeled `plan` are inspected against a freshly synced `/workspace` and clarified with Strawman defaults (`grill-with-docs`) conforming to `GLOSSARY.md`. Once approved (`ready`), the Orchestrator decomposes the spec into atomic **native GitHub Sub-Issues** (each with an explicit **Test Plan**) via `.factory/sub-issue.sh`, dispatches strictly **1 unique Sub-Issue per idle worker container per PR** using `.factory/dispatch-worker.sh`, and advances across dependency waves as PRs merge to `staging`. Whenever an Epic finishes on `staging`, the Orchestrator opens/updates **one rolling `staging -> master` Release PR** (via `.factory/release-pr.sh`) in the Kanban **`Awaiting Approval`** column for human sign-off via **"Create a merge commit"**. Upon merge to `master`, the Architect triggers `retro` to capture lessons learned.
+- **🛡️ Single-Pane `Awaiting Approval` Board + Trusted-Branch `human-gate-guard`:** Routine PRs flow to `staging` without extra labels once `ci-and-evidence` and `human-gate-guard` pass. `human-gate-guard.yml` executes from the trusted `master` branch and locks protected paths or manual `human-gate` tags.
+- **📚 Curated Quality & Pocock Skills Suite:** Shared coding/domain skills (`GLOSSARY.md`, `tdd`, `domain-modeling`, `simplify`, `pr`, `code-review`, `handoff`, `grill-with-docs`, `retro`) are distributed via `.factory/sync-skills.sh`, paired with `.github/workflows/scheduled-hygiene.yml` for periodic quality audits.
 
 ### Zero-Trust Container, Secret, Database & GitHub App Isolation
 Each tier is isolated across **four** boundaries: container/network isolation (`factory-net`, `llm-net`, `db-net`), zero-key sidecars (`auth-minter` + `llm-proxy`), per-worker Postgres isolation (`factory-postgres`), and GitHub server-side locks (**2 GitHub Apps** + **3 Stacked Rulesets** + **trusted `human-gate-guard`**):
@@ -40,11 +41,12 @@ Each tier is isolated across **four** boundaries: container/network isolation (`
 | :--- | :--- | :--- | :--- |
 | **`auth-minter`** *(No LLM, no repo)* | `factory-net` | Host GitHub `.pem` keys (`:ro`), `apps.env` (`:ro`) | Repo code, LLM API keys, Postgres, inbound internet |
 | **`llm-proxy`** *(No LLM, no repo)* | `llm-net` | Host `llm-secrets.env` (`:ro`), model allowlist, hourly caps, `/stats` telemetry | Repo code, GitHub `.pem` keys, Postgres, routine workers |
-| **`factory-postgres`** *(Postgres 16)* | `db-net` *(internal)* | 3 isolated non-superuser DBs (`app_gemini`, `app_qwen`, `app_fable`) | Internet, host `$HOME`, `herdr-hub`, GitHub/LLM secrets |
+| **`factory-postgres`** *(Postgres 16)* | `db-net` *(internal)* | 4 isolated non-superuser DBs (`app_gemini`, `app_qwen`, `app_senior`, `app_fable`) | Internet, host `$HOME`, `herdr-hub`, GitHub/LLM secrets |
 | **`herdr-hub`** *(Herdr + Bridge + Architect)* | `factory-net`, `llm-net` | `auth-architect:ro`, dummy proxy key, own `/workspace`, `bridge.env:ro`, shared + architect + `herdr` skills | Host `$HOME`, `.pem` keys, **real API keys**, `docker.sock`, **`factory-postgres`**, Fable auth |
-| **`worker-gemini`** *(Antigravity CLI)* | `factory-net`, `db-net` | `auth-worker:ro`, own `/workspace`, own `gemini-auth`, `app_gemini` DB, shared domain skills | Host `$HOME`, `.pem` keys, `llm-proxy`, `architect` token, `app_qwen`/`app_fable` DBs, Fable auth |
-| **`worker-qwen`** *(Hermes Local Qwen)* | `factory-net`, `db-net` | `auth-worker:ro`, own `/workspace`, host GPU port, `app_qwen` DB, shared domain skills | Host `$HOME`, `.pem` keys, `llm-proxy`, `architect` token, `app_gemini`/`app_fable` DBs, Fable auth |
-| **`specialist-fable`** *(Claude Code, IDLE 95%)* | `factory-net`, `llm-net`, `db-net` | `auth-worker:ro`, own `/workspace`, own `fable-auth`, `app_fable` DB, shared + fable skills | Host `$HOME`, `.pem` keys, **real API keys**, `architect` token, `app_gemini`/`app_qwen` DBs |
+| **`senior-worker`** *(Factory Orchestrator / Relief)* | `factory-net`, `llm-net`, `db-net` | `auth-worker:ro`, own `/workspace`, `app_senior` DB, shared + orchestrator skills | Host `$HOME`, `.pem` keys, `architect` token, `app_gemini`/`app_qwen`/`app_fable` DBs |
+| **`worker-gemini`** *(Antigravity CLI)* | `factory-net`, `db-net` | `auth-worker:ro`, own `/workspace`, own `gemini-auth`, `app_gemini` DB, shared domain skills | Host `$HOME`, `.pem` keys, `llm-proxy`, `architect` token, `app_qwen`/`app_senior`/`app_fable` DBs, Fable auth |
+| **`worker-qwen`** *(Hermes Local Qwen)* | `factory-net`, `db-net` | `auth-worker:ro`, own `/workspace`, host GPU port, `app_qwen` DB, shared domain skills | Host `$HOME`, `.pem` keys, `llm-proxy`, `architect` token, `app_gemini`/`app_senior`/`app_fable` DBs, Fable auth |
+| **`specialist-fable`** *(Claude Code, IDLE 95%)* | `factory-net`, `llm-net`, `db-net` | `auth-worker:ro`, own `/workspace`, own `fable-auth`, `app_fable` DB, shared + fable skills | Host `$HOME`, `.pem` keys, **real API keys**, `architect` token, `app_gemini`/`app_qwen`/`app_senior` DBs |
 
 > **Why Gemini, Qwen, and `specialist-fable` Share One `factory-worker` App:**
 > Because all execution containers authenticate as `factory-worker[bot]`, GitHub treats them as the **same PR author**—so no worker or specialist can rubber-stamp or self-merge its own commits, E2E tests, or conflict fixes. Every PR must pass CI (`ci-and-evidence`) + server-enforced `human-gate-guard` and be formally approved by `factory-architect[bot]` (or You for gated paths/`human-gate`/production `master` PRs).
@@ -336,6 +338,10 @@ case "$AGENT_ID" in
     # Qwen (Hermes) gets shared domain skills ONLY (keeps 54k context clean)
     link_skills_into "$HOME/.hermes/skills" "$SHARED_DIR"
     ;;
+  senior-worker|orchestrator)
+    # Orchestrator gets shared domain skills + orchestrator role skills (to-tickets, pr-evidence-review)
+    link_skills_into "$HOME/.hermes/skills" "$SHARED_DIR" "${ROLE_DIR}/orchestrator"
+    ;;
   specialist-fable)
     # Claude Code gets shared domain skills + Fable conflict/rescue playbook
     link_skills_into "$HOME/.claude/skills" "$SHARED_DIR" "${ROLE_DIR}/fable"
@@ -499,9 +505,33 @@ echo "Container /workspace ready on branch $BRANCH_NAME (clean DB + synced deps/
 ```
 > **Exit Code `2` (`MERGE_CONFLICT`):** Leaves exact conflict markers in `/workspace` for `specialist-fable` to resolve—or signals `worker-gemini` / `worker-qwen` to immediately run `git merge --abort` and escalate to the Architect for Fable.
 
+**File 5: `.factory/dispatch-worker.sh`**
+Used by the Orchestrator to dispatch Sub-Issues to idle workers. Sends `/clear` over Herdr to wipe the worker's LLM context window cleanly before sending the fresh prompt, ensuring every ticket begins with a clean mental slate.
+
+```bash
+#!/usr/bin/env bash
+# Usage: .factory/dispatch-worker.sh <worker_name> <sub_issue_prompt>
+set -euo pipefail
+
+WORKER_NAME="${1:-}"
+PROMPT="${2:-}"
+
+if [ -z "$WORKER_NAME" ] || [ -z "$PROMPT" ]; then
+  echo "Usage: $0 <worker_name> <sub_issue_prompt>" >&2
+  exit 1
+fi
+
+echo "[dispatch-worker] Wiping LLM context memory for ${WORKER_NAME}..."
+herdr agent send-keys "$WORKER_NAME" "/clear" "Enter" 2>/dev/null || true
+sleep 1
+
+echo "[dispatch-worker] Dispatching fresh Sub-Issue prompt to ${WORKER_NAME}..."
+herdr agent prompt "$WORKER_NAME" "$PROMPT"
+```
+
 ### 3.2 Create Isolated Multi-Worker Postgres Init Script (`.factory/postgres/init-dbs.sh`)
 Create `.factory/postgres/init-dbs.sh` (`chmod +x .factory/postgres/init-dbs.sh`).
-Provisions **3 locked-down, non-superuser databases** (`app_gemini`, `app_qwen`, `app_fable`) with `REVOKE ALL ON DATABASE ... FROM PUBLIC`, a `30s` statement timeout, and a dedicated **`extensions` schema** (on each worker's `search_path`) so `.factory/prep-branch.sh` can safely run `DROP SCHEMA public CASCADE; CREATE SCHEMA public;` as a non-superuser without dropping or requiring superuser rights for `pgcrypto` / `uuid-ossp`.
+Provisions **4 locked-down, non-superuser databases** (`app_gemini`, `app_qwen`, `app_senior`, `app_fable`) with `REVOKE ALL ON DATABASE ... FROM PUBLIC`, a `30s` statement timeout, and a dedicated **`extensions` schema** (on each worker's `search_path`) so `.factory/prep-branch.sh` can safely run `DROP SCHEMA public CASCADE; CREATE SCHEMA public;` as a non-superuser without dropping or requiring superuser rights for `pgcrypto` / `uuid-ossp`.
 
 ```bash
 #!/usr/bin/env bash
@@ -1358,11 +1388,11 @@ Run these 8 verification checks before handing the factory real production Epics
 
 ### Test 3 — Routine Build Wave -> Local Evidence -> Auto-Merge to `staging` + Post-Merge `staging` CI
 1. Apply **`ready`** to the approved Epic (or a tiny routine standalone Issue touching non-protected files).
-2. Verify the Architect checks `herdr agent list` + `in-progress` occupancy, swaps `ready` -> `in-progress`, updates the Kanban board (`In Progress` + `Worker`), and dispatches **1 unique Sub-Issue** to an idle worker (`worker-gemini` or `worker-qwen`).
-3. Verify the worker runs `.factory/prep-branch.sh` (clean Postgres schema reset), implements the slice + tests, and opens a PR targeting `staging` with `Closes #<sub_issue>`.
+2. Verify the Orchestrator checks `herdr agent list` + `in-progress` occupancy, swaps `ready` -> `in-progress`, updates the Kanban board (`In Progress` + `Worker`), and dispatches **1 unique Sub-Issue** to an idle worker (`worker-gemini` or `worker-qwen`) via `.factory/dispatch-worker.sh` (which sends `/clear` to the worker first).
+3. Verify the worker runs `.factory/prep-branch.sh` (clean Postgres schema reset), implements the slice + tests following `tdd`, and opens a PR targeting `staging` with `Closes #<sub_issue>`.
 4. Verify `CI & PR Evidence` passes against clean-room Postgres 16 AND `human-gate-guard` publishes green Commit Status on `pr.head.sha`.
-5. For UI/E2E PRs, confirm the Architect runs `.factory/fetch-evidence.sh <run_id> <pr_num>` and inspects downloaded PNGs with Hermes Vision (`llm-proxy` `/stats` shows `/glm` and `/vision` token counts incrementing).
-6. Verify the Architect approves and squash-merges to `staging`, **post-merge `CI & PR Evidence` runs automatically on `push` to `staging`**, and the Sub-Issue moves to `Done`.
+5. For UI/E2E PRs, confirm the Orchestrator runs `.factory/fetch-evidence.sh <run_id> <pr_num>` and inspects downloaded PNGs with Vision (`llm-proxy` `/stats` shows `/glm` and `/vision` token counts incrementing).
+6. Verify the Orchestrator approves and squash-merges to `staging`, **post-merge `CI & PR Evidence` runs automatically on `push` to `staging`**, and the Sub-Issue moves to `Done`.
 
 ### Test 4 — Turn-Serialized Priority Wait-Queue & 8-Second Comment Coalescer
 1. Post **2 rapid comments** (2–3 seconds apart) on the **same** open Issue or PR. Confirm `bridge` logs show them bundled into **1** combined `[GITHUB EVENT: HUMAN COMMENTS (2 bundled...)]` prompt instead of waking the Architect twice.
@@ -1379,11 +1409,11 @@ Run these 8 verification checks before handing the factory real production Epics
 ### Test 6 — Final-Wave Stateless E2E Verification & Rolling `staging -> master` Release PR
 1. After all build waves of a multi-layer Epic merge to `staging`, confirm the Architect dispatches the **Final-Wave E2E Verification** Sub-Issue to a **fresh, stateless session** (default `worker-gemini`, or `worker-qwen` only for narrow 1–2 screen flows) using `.agents/skills/e2e-testing/SKILL.md`.
 2. Confirm the worker runs Playwright locally against its isolated `$DATABASE_URL` (using preinstalled Chromium deps), passes CI, and merges to `staging`.
-3. Once `completed === total` Sub-Issues, verify the Architect closes the parent Epic and runs `.factory/release-pr.sh <epic_num>`, opening/updating **one** rolling `staging -> master` Release PR that:
+3. Once `completed === total` Sub-Issues, verify the Orchestrator closes the parent Epic and runs `.factory/release-pr.sh <epic_num>`, opening/updating **one** rolling `staging -> master` Release PR that:
    * Carries the purple `human-gate` label,
    * Formally requests **you** as Reviewer,
    * Appears directly in the Kanban **`Awaiting Approval`** column.
-4. Click **Approve** on the Release PR, wait ~10s for `human-gate-guard` to flip green, and merge using **"Create a merge commit"** (**never Squash**) so `staging` and `master` stay cleanly aligned. Confirm the Release PR card auto-moves to **`Done`**.
+4. Click **Approve** on the Release PR, wait ~10s for `human-gate-guard` to flip green, and merge using **"Create a merge commit"** (**never Squash**) so `staging` and `master` stay cleanly aligned. Confirm the Release PR card auto-moves to **`Done`**, triggering the Architect's retrospective learning loop (`retro/SKILL.md`).
 
 ### Test 7 — On-Demand Fable Escalation Cap (`fable-escalated`)
 1. Confirm `specialist-fable` was **never** woken during Tests 2–6.

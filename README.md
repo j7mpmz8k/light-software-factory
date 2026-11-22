@@ -32,29 +32,35 @@ The entire system runs inside **8 lightweight Docker containers** on your own se
          │ 🚦 webhook-bridge (Hub) │                     │ 🛡️ human-gate-guard     │
          │   Priority Wait-Queue   │                     │   Runs on trusted master│
          │   8s Comment Coalescer  │                     └─────────────────────────┘
-         └────────────┬────────────┘
-                      │ Wakes & prompts via Herdr CLI
-                      ▼
-         ┌─────────────────────────┐
-         │ 🧠 architect (Hermes)   │ ◄─── Zero DB access, Zero raw keys
-         │    GLM-5.3 & Vision     │ ◄─── Evaluates diffs, approves to staging
-         └────────────┬────────────┘
-                      │ Dispatches atomic Sub-Issues over internal SSH (port 2222)
-         ┌────────────┼──────────────────────────┬──────────────────────────┐
-         ▼            ▼                          ▼                          ▼
- ┌───────────────┐ ┌───────────────┐ ┌───────────────────────┐ ┌───────────────────────┐
- │ 🛠️ worker-     │ │ 🛠️ worker-    │ │ ⭐ senior-worker      │ │ 🔥 specialist-fable   │
- │   gemini      │ │   qwen        │ │   Hermes (Gemini/API) │ │   Claude Code         │
- │ Antigravity   │ │ Local GPU     │ │ Frontier API Relief   │ │ 1-pass conflict/rescue│
- │ Flat Pro Sub  │ │ 100% Free     │ │ IDLE until needed     │ │ IDLE 95% of the time  │
- └───────┬───────┘ └───────┬───────┘ └───────────┬───────────┘ └───────────┬───────────┘
-         │                 │                     │                         │
-         ▼                 ▼                     ▼                         ▼
- ┌─────────────────────────────────────────────────────────────────────────────────────┐
- │ 🗄️ factory-postgres (db-net)                                                        │
- │   4 Isolated Databases: app_gemini | app_qwen | app_senior | app_fable              │
- │   Clean schema reset on every branch prep                                           │
- └─────────────────────────────────────────────────────────────────────────────────────┘
+         └───────┬─────────────────┘
+                 │
+      ┌──────────┴──────────────────────────────────────┐
+      │ Routes Human Comments & Ideas                   │ Routes CI & 'ready' Events
+      ▼                                                 ▼
+┌───────────────────────────┐             ┌───────────────────────────┐
+│ 🧠 architect (Hermes)     │             │ ⚙️ senior-worker          │
+│   Chief Architect / CTO   │             │   Factory Orchestrator    │
+│   Persistent Context      │             │   Ephemeral Context       │
+│   Discussions, Specs,     │             │   to-tickets, Reviews,    │
+│   GLOSSARY.md & /handoff  │             │   Squash-merges, Relief   │
+└───────────────────────────┘             └─────────────┬─────────────┘
+                                                        │ Dispatches Sub-Issues via
+                                                        │ dispatch-worker.sh (/clear)
+                 ┌──────────────────────────────────────┼──────────────────────────┐
+                 ▼                                      ▼                          ▼
+         ┌───────────────┐                      ┌───────────────┐          ┌───────────────────────┐
+         │ 🛠️ worker-     │                      │ 🛠️ worker-    │          │ 🔥 specialist-fable   │
+         │   gemini      │                      │   qwen        │          │   Claude Code         │
+         │ Antigravity   │                      │ Local GPU     │          │ 1-pass conflict/rescue│
+         │ Flat Pro Sub  │                      │ 100% Free     │          │ IDLE 95% of the time  │
+         └───────┬───────┘                      └───────┬───────┘          └───────────┬───────────┘
+                 │                                      │                              │
+                 ▼                                      ▼                              ▼
+ ┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │ 🗄️ factory-postgres (db-net)                                                                    │
+ │   4 Isolated Databases: app_gemini | app_qwen | app_senior | app_fable                          │
+ │   Clean schema reset on every branch prep via .factory/prep-branch.sh                           │
+ └─────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Why It Is "Zero-Trust"
@@ -69,12 +75,30 @@ The entire system runs inside **8 lightweight Docker containers** on your own se
 
 | Role | Container & Engine | Model | Primary Mission |
 | :--- | :--- | :--- | :--- |
-| **🧠 Architect** | `herdr-hub`<br>*(Hermes CLI)* | **GLM-5.3** +<br>GLM-5.3-Flash Vision | **Orchestrator & Reviewer:** Plans Epics into atomic Sub-Issues, inspects PR diffs, downloads and inspects Playwright screenshot evidence with Vision, squash-merges routine PRs to `staging`, and opens rolling Release PRs. Supports automatic failover to backup models via `llm-proxy`. |
-| **🚦 Webhook Bridge** | `herdr-hub`<br>*(Node daemon)* | — | **Traffic Controller:** Buffers human comments (8s window), serializes agent turns, catches post-merge `staging` CI breakages, and monitors for stalled workers (>45 min). |
-| **🛠️ Primary Worker** | `worker-gemini`<br>*(Antigravity CLI)* | **Gemini 3.8 Flash**<br>*(Google AI Pro)* | **Heavy Lifter:** High-speed, high-volume feature building, backend/API logic, migrations, and **Final-Wave Playwright E2E tests** (in fresh, stateless sessions). |
-| **💻 Parallel Worker** | `worker-qwen`<br>*(Hermes CLI)* | **Local Qwen 3.8 27B**<br>*(Local GPU Host)* | **Free & Parallel:** UI styling, components, unit tests, narrow 1–2 screen cross-model verification, and overflow capacity if Gemini hits rolling rate limits. |
-| **⭐ Senior Worker** | `senior-worker`<br>*(Hermes CLI)* | **Gemini 4 Neon**<br>*(or DeepSeek / Frontier API)* | **High-Difficulty Relief:** Steps in for complex architectural slices, difficult algorithmic refactors, or when Antigravity quota is depleted. Idles when not needed to conserve API spend. |
+| **🧠 Chief Architect** | `herdr-hub`<br>*(Hermes CLI)* | **GLM-5.3** +<br>GLM-5.3-Flash Vision | **The Thinker & Technical Lead:** Your sole conversational partner on GitHub. Holds persistent memory of project history and conventions. Bounces ideas in Discussions, formulates Strawman specs with recommended defaults via `grill-with-docs`, enforces `GLOSSARY.md`, and performs warm resets via `/handoff`. Shielded from low-level CI logs and diffs. Supports automatic failover via `llm-proxy`. |
+| **⚙️ Factory Orchestrator** | `senior-worker`<br>*(Hermes CLI)* | **Gemini 4 Neon**<br>*(or DeepSeek / Frontier API)* | **The Doer & Assembly Foreman:** Operates in clean, ephemeral turns (wiped with `/clear` before each run). Wakes when an issue is `ready`, slices specs into vertical tracer bullets (`to-tickets` / `sub-issue.sh`), dispatches tasks to workers via `.factory/dispatch-worker.sh` (with `/clear`), inspects PR diffs and visual Playwright evidence (`pr-evidence-review`), and squash-merges to `staging`. Doubles as frontier relief builder when needed. |
+| **🚦 Webhook Bridge** | `herdr-hub`<br>*(Node daemon)* | — | **Traffic Controller & Switchboard:** Routes human comments and ideas to the Architect, routes execution and CI events to the Orchestrator with pre-turn `/clear` wipes, serializes turns, catches post-merge `staging` regressions, and monitors worker stalls (>45 min). |
+| **🛠️ Primary Worker** | `worker-gemini`<br>*(Antigravity CLI)* | **Gemini 3.8 Flash**<br>*(Google AI Pro)* | **Heavy Lifter:** Clean-on-dispatch task execution, strict Red-Green-Refactor TDD (`tdd`), backend/API logic, migrations, and **Final-Wave Playwright E2E tests** on your flat-rate Google AI Pro subscription. |
+| **💻 Parallel Worker** | `worker-qwen`<br>*(Hermes CLI)* | **Local Qwen 3.8 27B**<br>*(Local GPU Host)* | **Free & Parallel:** Clean-on-dispatch task execution for UI styling, components, unit tests, and overflow capacity if Gemini hits rolling limits. |
 | **🔥 Specialist** | `specialist-fable`<br>*(Claude Code)* | **Claude Fable** | **On-Demand SWAT Team:** Idle 95% of the time. Capped at strictly **1 pass per PR** for hairy merge conflicts or 3-strike CI loops. Never used for routine feature writing. |
+
+---
+
+### 3.1 The Matt Pocock Quality & Skills Suite
+
+The factory integrates a curated suite of operational and architectural skills from Matt Pocock’s ecosystem:
+
+* **[GLOSSARY.md](GLOSSARY.md):** The ubiquitous domain dictionary and source of truth across the factory. Every agent and prompt conforms to canonical terms (e.g. `Organization` over `Tenant`).
+* **Strict TDD ([.agents/skills/tdd](.agents/skills/tdd/SKILL.md)):** Red-Green-Refactor enforcement. Workers must commit failing tests (RED) and confirm expected failure before writing implementation code (GREEN).
+* **Domain Modeling ([.agents/skills/domain-modeling](.agents/skills/domain-modeling/SKILL.md)):** Type-first schema design, Zod validators, and invariants making illegal states unrepresentable.
+* **Codebase Simplification ([.agents/skills/simplify](.agents/skills/simplify/SKILL.md)):** Aggressive YAGNI and complexity reduction to prevent AI over-engineering and dead code.
+* **PR Authoring ([.agents/skills/pr](.agents/skills/pr/SKILL.md)):** Standardized pull requests containing verified test run outputs and Playwright visual screenshot evidence.
+* **Objective Code Review ([.agents/skills/code-review](.agents/skills/code-review/SKILL.md)):** Rigorous QA rubric used by the Orchestrator for verifying PR diffs and screenshots against acceptance criteria.
+* **Lossless Warm Handoff ([.agents/skills/handoff](.agents/skills/handoff/SKILL.md)):** Checkpoint skill for the Architect (`/handoff`), producing `HANDOFF.md` before wiping context, eliminating vendor lossy auto-compression.
+* **Fluid Requirements Alignment ([.factory/role-skills/architect/grill-with-docs](.factory/role-skills/architect/grill-with-docs/SKILL.md)):** Strawman proposals with recommended defaults and "LGTM" fast-track, bypassing trivial bug fixes.
+* **Continuous Retrospective ([.factory/role-skills/architect/retro](.factory/role-skills/architect/retro/SKILL.md)):** Automated post-release retrospective updating `AGENTS.md` and syncing skills on every merge to `master`.
+* **Scheduled Codebase Hygiene ([.github/workflows/scheduled-hygiene.yml](.github/workflows/scheduled-hygiene.yml)):** Automated weekly cron audit running type checks, linters, and dependency audits in an isolated session.
+* **Clean-on-Dispatch ([.factory/dispatch-worker.sh](.factory/dispatch-worker.sh)):** Automated `/clear` wipe sent to worker panes before dispatching Sub-Issues, ensuring every ticket starts with a fresh mind.
 
 ---
 
@@ -95,11 +119,15 @@ You never need to babysit terminal logs or manage containers. You drive the enti
 ```
 
 ### Touchpoint 1: From Rough Idea to Autonomous Execution
-1. Open a **Feature Request** on GitHub and apply the label **`plan`**.
-2. The Architect wakes up, syncs `/workspace`, analyzes your architecture, and breaks the feature down into **atomic Sub-Issues** (each with its own explicit Test Plan).
-3. The Architect posts a **Wave Blueprint** comment on the parent Issue and **stops**.
-4. You review the blueprint. If you want changes, reply on the Issue (the Bridge bundles your comments and informs the Architect).
-5. When satisfied, apply the label **`ready`**. The Architect claims the first wave and assigns sub-tasks to idle workers.
+1. **Discuss or Plan:** Open a **Feature Request** on GitHub (or start a Discussion).
+   * **Casual Mode:** Chat freely without interrogation. The Architect acts as a conversational sparring partner.
+   * **Planning Mode:** Apply the label **`plan`** or comment `/grill`.
+2. **Strawman with Defaults:** The Architect analyzes [`GLOSSARY.md`](GLOSSARY.md) and your architecture, then posts a **Concrete Strawman Proposal** with recommended defaults and the **"LGTM" fast-track** (trivial bugfixes bypass grilling automatically).
+3. **Align & Lock:**
+   * If happy: Reply **"LGTM"** (done in 2 seconds).
+   * If adjustments needed: Reply with changes; the Architect updates the spec.
+4. **Handoff to Factory Automation:** Once the spec is locked, the Architect applies the label **`ready`**.
+5. **Silent Factory Execution:** The **Factory Orchestrator** wakes up in a fresh, ephemeral session, slices the spec into atomic Sub-Issues via `to-tickets` / `.factory/sub-issue.sh`, and dispatches Wave 1 to workers via `.factory/dispatch-worker.sh` (sending `/clear` to workers before prompting).
 
 ### Touchpoint 2: The Single Column You Check — `Awaiting Approval`
 The Kanban board has 7 columns, but you only ever need to look at **one**:
@@ -110,7 +138,7 @@ The Kanban board has 7 columns, but you only ever need to look at **one**:
                                                 👉 (YOUR ATTENTION HERE)
 ```
 
-Routine PRs flow straight to `staging` automatically once automated CI and the Architect approve them. However, any PR that touches:
+Routine PRs flow straight to `staging` automatically once automated CI and the Orchestrator's evidence review approve them. However, any PR that touches:
 * Database migrations or schema definitions (`migrations/`, `*.sql`, `prisma/`, `drizzle/`)
 * Authentication or security logic (`auth/`, `security/`, `rbac/`)
 * Core factory configuration or skills (`.github/`, `.factory/`, `.agents/`, `AGENTS.md`)
@@ -118,15 +146,21 @@ Routine PRs flow straight to `staging` automatically once automated CI and the A
 
 is immediately locked by `human-gate-guard`, badged with a purple **`human-gate`** tag, assigned to **you** as a formal GitHub Reviewer, and placed in **`Awaiting Approval`**.
 
-**Your action:** Read the Architect's summary, click **Approve** in the PR review UI, wait ~5–10 seconds for the green checkmark, and click **Squash and merge**.
+**Your action:** Read the summary, click **Approve** in the PR review UI, wait ~5–10 seconds for the green checkmark, and click **Squash and merge**.
 
 ### Touchpoint 3: Shipping to Production (`staging -> master`)
-Once all Sub-Issues for an Epic are merged to `staging`, the Architect runs a Final-Wave Playwright E2E verification in a clean environment. When green, it closes the parent Epic and opens/updates **one rolling Release PR** (`staging -> master`) in **`Awaiting Approval`**.
+Once all Sub-Issues for an Epic are merged to `staging`, the Orchestrator verifies the Epic is 100% complete and runs `.factory/release-pr.sh`, opening/updating **one rolling Release PR** (`staging -> master`) in **`Awaiting Approval`**.
 
 **Your action:**
-1. Review the aggregated release changelog.
+1. Review the aggregated release changelog written by the Architect.
 2. Click **Approve**.
 3. Merge using **"Create a merge commit"** (*never Squash!*). This keeps `staging` and `master` histories aligned forever.
+4. **Continuous Learning:** Upon merging to `master`, the Architect automatically runs `retro`, extracting lessons learned into `AGENTS.md` and updating `GLOSSARY.md`.
+
+### Touchpoint 4: Memory Management & Lossless Handoff (`/handoff`)
+The Architect retains persistent context across features so it never suffers from amnesia. However, when you feel context is getting large after weeks of shipping:
+* Type **`/handoff`** on any Issue or Discussion.
+* The Architect produces a structured `HANDOFF.md` checkpoint (active invariants, decisions log, roadmap, and anti-patterns), clears its context window, and reboots warm with zero lost knowledge.
 
 ---
 
