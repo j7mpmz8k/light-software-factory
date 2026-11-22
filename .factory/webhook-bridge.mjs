@@ -46,6 +46,7 @@ const PORT = Number(process.env.WEBHOOK_PORT || 8787);
 const BIND_HOST = process.env.WEBHOOK_BIND_HOST || "0.0.0.0";
 const SECRET = process.env.GITHUB_WEBHOOK_SECRET || "";
 const ARCHITECT_PANE = process.env.ARCHITECT_PANE || "architect";
+const ORCHESTRATOR_PANE = process.env.ORCHESTRATOR_PANE || "senior-worker";
 const FABLE_PANE = process.env.FABLE_PANE || "specialist-fable";
 const MAX_CI_RETRIES = Number(process.env.MAX_CI_RETRIES || 3);
 const CI_WORKFLOW_NAME = process.env.CI_WORKFLOW_NAME || "CI & PR Evidence";
@@ -266,12 +267,14 @@ function sortQueue() {
   });
 }
 
-function enqueueArchitectPrompt(promptText, opts = {}) {
+function enqueuePrompt(promptText, opts = {}) {
   const item = {
     id: `turn_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     priority: opts.priority ?? PRIORITY.REVIEW_WAVE,
     kind: opts.kind || "general",
     threadKey: opts.threadKey || null,
+    targetPane: opts.targetPane || ARCHITECT_PANE,
+    shouldClear: Boolean(opts.shouldClear),
     prompt: promptText,
     queuedAt: Date.now(),
   };
@@ -279,17 +282,30 @@ function enqueueArchitectPrompt(promptText, opts = {}) {
   queue.push(item);
   sortQueue();
   saveQueueToDisk();
-  console.log(`[bridge] Enqueued turn ${item.id} [${item.kind}, prio=${item.priority}] (queue size: ${queue.length}).`);
+  console.log(`[bridge] Enqueued turn ${item.id} -> ${item.targetPane} [${item.kind}, prio=${item.priority}, clear=${item.shouldClear}] (queue size: ${queue.length}).`);
   drainQueue();
 }
 
-async function sendAndWaitArchitectTurn(promptText) {
+function enqueueArchitectPrompt(promptText, opts = {}) {
+  enqueuePrompt(promptText, { ...opts, targetPane: ARCHITECT_PANE, shouldClear: false });
+}
+
+function enqueueOrchestratorPrompt(promptText, opts = {}) {
+  enqueuePrompt(promptText, { ...opts, targetPane: ORCHESTRATOR_PANE, shouldClear: true });
+}
+
+async function sendAndWaitAgentTurn(pane, promptText, shouldClear = false) {
+  if (shouldClear) {
+    console.log(`[bridge] Sending /clear to ${pane} to reset LLM context before turn...`);
+    await execFileAsync("herdr", ["agent", "send-keys", pane, "/clear", "Enter"]).catch(() => {});
+    await new Promise((r) => setTimeout(r, 1000));
+  }
   await execFileAsync(
     "herdr",
     [
       "agent",
       "prompt",
-      ARCHITECT_PANE,
+      pane,
       promptText,
       "--wait",
       "--until",
@@ -314,7 +330,7 @@ async function drainQueue() {
       const next = queue[0];
       currentItemSummary = `${next.kind}${next.threadKey ? ` (${next.threadKey})` : ""}`;
       try {
-        await sendAndWaitArchitectTurn(next.prompt);
+        await sendAndWaitAgentTurn(next.targetPane || ARCHITECT_PANE, next.prompt, next.shouldClear);
         queue.shift();
         saveQueueToDisk();
       } catch (err) {
@@ -359,16 +375,16 @@ async function handleEvent(event, payload) {
     return;
   }
 
-  // 2. Issue labeled ready -> claim & dispatch wave
+  // 2. Issue labeled ready -> claim & dispatch wave via Orchestrator
   if (event === "issues" && payload.action === "labeled" && payload.label?.name === "ready") {
     const issue = payload.issue;
     await syncHubWorkspace();
     await syncBoardField(issue.number, "Status", "In Progress");
 
-    enqueueArchitectPrompt(
+    enqueueOrchestratorPrompt(
       [
         `[GITHUB EVENT: READY FOR EXECUTION] Issue #${issue.number} ("${issue.title}") was approved and labeled "ready".`,
-        `Inspect herdr agent list and dispatch Wave 1 atomic Sub-Issues to idle workers.`,
+        `Decompose this approved Spec into atomic Sub-Issues via skill: to-tickets and .factory/sub-issue.sh, then dispatch Wave 1 to idle workers using .factory/dispatch-worker.sh.`,
       ].join("\n"),
       { priority: PRIORITY.PLAN_READY, kind: "ready_dispatch", threadKey: `issue:${issue.number}` }
     );
@@ -442,11 +458,27 @@ async function handleEvent(event, payload) {
         await execFileAsync(RELEASE_PR_SCRIPT, [String(parentEpic.number)], { env: ARCHITECT_EXEC_ENV }).catch(() => {});
       }
     } else {
-      enqueueArchitectPrompt(
-        `[GITHUB EVENT: SUB-ISSUE MERGED] PR #${pr.number} (Sub-Issue #${linkedIssue}) merged to staging. Parent Epic #${parentEpic.number} progress: ${summary.completed}/${summary.total}. Dispatch next unblocked sub-issues.`,
+      enqueueOrchestratorPrompt(
+        `[GITHUB EVENT: SUB-ISSUE MERGED] PR #${pr.number} (Sub-Issue #${linkedIssue}) merged to staging. Parent Epic #${parentEpic.number} progress: ${summary.completed}/${summary.total}. Dispatch next unblocked sub-issues using .factory/dispatch-worker.sh.`,
         { priority: PRIORITY.REVIEW_WAVE, kind: "wave_check", threadKey: `issue:${parentEpic.number}` }
       );
     }
+    return;
+  }
+
+  // 5b. Production Release PR Merged into master -> Trigger Architect Retrospective
+  if (
+    event === "pull_request" &&
+    payload.action === "closed" &&
+    payload.pull_request?.merged === true &&
+    payload.pull_request?.base?.ref === "master"
+  ) {
+    const pr = payload.pull_request;
+    await syncHubWorkspace();
+    enqueueArchitectPrompt(
+      `[GITHUB EVENT: PRODUCTION RELEASE MERGED] Release PR #${pr.number} merged into master. Run skill: retro, update AGENTS.md and GLOSSARY.md, and run .factory/sync-skills.sh.`,
+      { priority: PRIORITY.PLAN_READY, kind: "release_retro", threadKey: `pr:${pr.number}` }
+    );
     return;
   }
 
@@ -458,7 +490,7 @@ async function handleEvent(event, payload) {
     if (run.event === "push" && run.head_branch === "staging") {
       if (run.conclusion === "failure") {
         await syncHubWorkspace();
-        enqueueArchitectPrompt(
+        enqueueOrchestratorPrompt(
           `[GITHUB EVENT: STAGING BROKEN — POST-MERGE CI FAILED] Run #${run.id} FAILED on staging. PAUSE merges and dispatch hotfix.`,
           { priority: PRIORITY.CI_URGENT, kind: "staging_broken", threadKey: "branch:staging" }
         );
@@ -472,21 +504,21 @@ async function handleEvent(event, payload) {
     const prMeta = await inspectPrMeta(prNumber, run.head_branch);
 
     if (run.conclusion === "failure") {
-      enqueueArchitectPrompt(
-        `[GITHUB EVENT: CI FAILED] PR #${prNumber} failed CI run #${run.id}. Dispatch fix to assigned worker.`,
+      enqueueOrchestratorPrompt(
+        `[GITHUB EVENT: CI FAILED] PR #${prNumber} failed CI run #${run.id}. Dispatch fix to assigned worker via .factory/dispatch-worker.sh.`,
         { priority: PRIORITY.CI_URGENT, kind: "ci_failed", threadKey: `pr:${prNumber}` }
       );
     } else if (run.conclusion === "success") {
       if (prMeta.humanGateBlocked || prMeta.hasHumanGateLabel) {
         await surfaceAwaitingApproval(prNumber, prMeta.linkedIssue, prMeta.baseRefName === "master");
-        enqueueArchitectPrompt(
+        enqueueOrchestratorPrompt(
           `[GITHUB EVENT: CI PASSED — GATED] PR #${prNumber} passed CI, moved to Awaiting Approval. Post review summary and STOP.`,
           { priority: PRIORITY.REVIEW_WAVE, kind: "ci_gated", threadKey: `pr:${prNumber}` }
         );
       } else {
         if (prMeta.linkedIssue) await syncBoardField(prMeta.linkedIssue, "Status", "In Review");
-        enqueueArchitectPrompt(
-          `[GITHUB EVENT: CI PASSED] PR #${prNumber} passed CI with no protected path locks. Review and squash-merge to staging.`,
+        enqueueOrchestratorPrompt(
+          `[GITHUB EVENT: CI PASSED] PR #${prNumber} passed CI with no protected path locks. Review diff & evidence via .factory/fetch-evidence.sh and skill: pr-evidence-review. If verified, squash-merge to staging.`,
           { priority: PRIORITY.REVIEW_WAVE, kind: "ci_passed", threadKey: `pr:${prNumber}` }
         );
       }
@@ -547,7 +579,7 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(PORT, BIND_HOST, () => {
-  console.log(`[bridge] Listening on :${PORT} | Architect: ${ARCHITECT_PANE} | Human Reviewer: @${HUMAN_REVIEWER || "unset"}`);
+  console.log(`[bridge] Listening on :${PORT} | Architect: ${ARCHITECT_PANE} | Orchestrator: ${ORCHESTRATOR_PANE} | Human Reviewer: @${HUMAN_REVIEWER || "unset"}`);
   if (queue.length > 0) drainQueue();
   reconcileStartupState();
 });

@@ -70,9 +70,12 @@ FABLE_CMD="claude --dangerously-skip-permissions"
 [ -n "${FABLE_MODEL:-}" ] && FABLE_CMD="claude --dangerously-skip-permissions --model \"${FABLE_MODEL}\""
 launch_ssh_agent_tab "specialist-fable" "claude" "$FABLE_CMD"
 
-echo "[launch-panes] Waiting for 'architect' to reach idle and seeding..."
+echo "[launch-panes] Waiting for 'architect' and 'senior-worker' to reach idle and seeding..."
 if herdr agent wait architect --until idle --until done --timeout 30000 >/dev/null 2>&1; then
   herdr agent prompt architect "$(cat /workspace/.factory/architect-seed.md)" >/dev/null || true
+fi
+if herdr agent wait senior-worker --until idle --until done --timeout 30000 >/dev/null 2>&1; then
+  herdr agent prompt senior-worker "$(cat /workspace/.factory/orchestrator-seed.md)" >/dev/null || true
 fi
 
 echo "[launch-panes] Native Herdr agents active:"

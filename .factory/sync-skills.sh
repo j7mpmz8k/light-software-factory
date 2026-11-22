@@ -36,8 +36,8 @@ case "$AGENT_ID" in
   worker-qwen)
     link_skills_into "$HOME/.hermes/skills" "$SHARED_DIR"
     ;;
-  senior-worker)
-    link_skills_into "$HOME/.hermes/skills" "$SHARED_DIR"
+  senior-worker|orchestrator)
+    link_skills_into "$HOME/.hermes/skills" "$SHARED_DIR" "${ROLE_DIR}/orchestrator"
     ;;
   specialist-fable)
     link_skills_into "$HOME/.claude/skills" "$SHARED_DIR" "${ROLE_DIR}/fable"
