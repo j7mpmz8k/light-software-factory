@@ -13,6 +13,8 @@ All agents (Architect, Workers, Reviewer) and developers must use these canonica
 | **Sub-Issue** | An atomic, vertical tracer-bullet task executed by a single worker on an isolated branch. | Child ticket, Subtask, Micro-issue |
 | **Wave** | A group of independent Sub-Issues that can execute safely in parallel without merge conflicts. | Batch, Sprint, Phase group |
 | **Tracer Bullet** | A thin, end-to-end slice spanning database, backend, and UI to prove architecture early. | Prototype, Spike, Vertical spike |
+| **Deep Module** | A module with a small, simple interface hiding deep implementation complexity (Ousterhout/Pocock). Maximizes test determinism. | Shallow wrapper, Thin abstraction, Passthrough |
+| **Shallow Module** | An anti-pattern where the interface is as complex as the implementation, leaking internals and causing brittle tests. | Thin layer, Trivial wrapper |
 | **Spec** | The locked technical specification created by the Architect after grilling and modeling. | Plan, RFC, Blueprint |
 | **Evidence** | Deterministic artifacts (Playwright screenshots, test logs, coverage) verifying a PR works. | Proof, Screenshots, Output |
 | **Hygiene** | Routine automated maintenance (dead code removal, dependency audit, type checking). | Cleanup, Sweeping, Chore pass |

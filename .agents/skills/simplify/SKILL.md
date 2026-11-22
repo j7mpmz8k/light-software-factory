@@ -13,7 +13,9 @@ AI agents tend to over-engineer, creating premature abstractions, unused helper 
    - Write code ONLY for the current requirement.
    - Do not add configuration flags, hooks, or parameters for speculative future use cases.
 
-2. **Flatten Abstractions:**
+2. **Flatten Abstractions & Eliminate Shallow Modules:**
+   - Eliminate shallow wrappers (functions or classes that merely pass arguments through with zero transformation or domain value).
+   - Prefer **deep modules**: simple public surface, real work encapsulated inside.
    - Inline single-use functions or wrappers if they do not provide genuine domain clarity.
    - Prefer straightforward imperative code over convoluted multi-layered indirection.
 
