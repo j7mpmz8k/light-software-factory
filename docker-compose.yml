@@ -135,6 +135,8 @@ services:
       ARCHITECT_VISION_MODEL: ${ARCHITECT_VISION_MODEL:-glm-5.3-flash}
       ARCHITECT_BACKUP_MODEL: ${ARCHITECT_BACKUP_MODEL:-}
       ARCHITECT_PROXY_TOKEN: ${ARCHITECT_PROXY_TOKEN:-proxy-architect-only}
+      SENIOR_MODEL: ${SENIOR_MODEL:-gemini-4-neon}
+      SENIOR_PROXY_TOKEN: ${SENIOR_PROXY_TOKEN:-proxy-senior-only}
       FABLE_MODEL: ${FABLE_MODEL:-}
     volumes:
       - auth-architect:/run/factory-auth/architect:ro

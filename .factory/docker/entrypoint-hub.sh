@@ -66,6 +66,35 @@ EOF
 cp "$HOME/.hermes/profiles/architect/.env" "$HOME/.hermes/.env"
 chmod 600 "$HOME/.hermes/.env" "$HOME/.hermes/profiles/architect/.env"
 
+# 2b. Auto-sync Hermes Orchestrator profile inside herdr-hub
+SEN_MODEL="${SENIOR_MODEL:-gemini-4-neon}"
+SEN_TOK="${SENIOR_PROXY_TOKEN:-proxy-senior-only}"
+
+mkdir -p "$HOME/.hermes/profiles/orchestrator"
+cat <<EOF > "$HOME/.hermes/profiles/orchestrator/config.yaml"
+# Auto-generated on boot from compose.env
+model:
+  default: "${SEN_MODEL}"
+  provider: "custom"
+  base_url: "http://llm-proxy:4000/senior"
+  api_key: "${SEN_TOK}"
+  context_length: 64000
+plugins:
+  enabled:
+    - herdr-agent-state
+EOF
+
+if [ -d "$HOME/.hermes/plugins/herdr-agent-state" ]; then
+  mkdir -p "$HOME/.hermes/profiles/orchestrator/plugins"
+  cp -r "$HOME/.hermes/plugins/herdr-agent-state" "$HOME/.hermes/profiles/orchestrator/plugins/" 2>/dev/null || true
+fi
+
+cat <<EOF > "$HOME/.hermes/profiles/orchestrator/.env"
+OPENAI_API_KEY=${SEN_TOK}
+OPENAI_BASE_URL=http://llm-proxy:4000/senior
+EOF
+chmod 600 "$HOME/.hermes/profiles/orchestrator/.env"
+
 # 3. Bootstrap isolated /workspace repo clone
 /usr/local/bin/bootstrap-workspace.sh
 if [ -f /workspace/.factory/enter-role.sh ]; then

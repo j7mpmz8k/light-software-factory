@@ -42,12 +42,15 @@ case "$AGENT_ID" in
   worker-qwen)
     link_skills_into "$HOME/.hermes/skills" "$SHARED_DIR"
     ;;
-  senior-worker|orchestrator)
+  orchestrator)
     link_skills_into "$HOME/.hermes/skills" "$SHARED_DIR" "${ROLE_DIR}/orchestrator"
     if command -v herdr >/dev/null 2>&1; then
       mkdir -p "$HOME/.hermes/skills/herdr"
       herdr --skill > "$HOME/.hermes/skills/herdr/SKILL.md" 2>/dev/null || true
     fi
+    ;;
+  senior-worker)
+    link_skills_into "$HOME/.hermes/skills" "$SHARED_DIR"
     ;;
   specialist-fable)
     link_skills_into "$HOME/.claude/skills" "$SHARED_DIR" "${ROLE_DIR}/fable"

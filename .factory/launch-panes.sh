@@ -27,11 +27,17 @@ herdr tab rename "$BRIDGE_TAB" bridge >/dev/null
 herdr pane rename "$BRIDGE_PANE" bridge >/dev/null
 herdr pane run "$BRIDGE_PANE" "node /workspace/.factory/webhook-bridge.mjs" >/dev/null
 
-# 2. Tab: architect
+# 2. Tab: architect (Chief Architect inside herdr-hub)
 ARCH_TAB="$(herdr tab create --workspace "$WS_ID" --cwd /workspace --label architect --focus)"
 ARCH_PANE="$(echo "$ARCH_TAB" | jq -r '.result.root_pane.pane_id')"
 herdr pane rename "$ARCH_PANE" architect >/dev/null
 herdr agent start architect --kind hermes --pane "$ARCH_PANE" -- --profile architect >/dev/null
+
+# 3. Tab: orchestrator (Factory Orchestrator inside herdr-hub)
+ORCH_TAB="$(herdr tab create --workspace "$WS_ID" --cwd /workspace --label orchestrator --no-focus)"
+ORCH_PANE="$(echo "$ORCH_TAB" | jq -r '.result.root_pane.pane_id')"
+herdr pane rename "$ORCH_PANE" orchestrator >/dev/null
+herdr agent start orchestrator --kind hermes --pane "$ORCH_PANE" -- --profile orchestrator >/dev/null
 
 # Helper: launch SSH agent tab with bash -lic (Fix A3) and unattended execution (Fix A4)
 launch_ssh_agent_tab() {
@@ -70,12 +76,12 @@ FABLE_CMD="claude --dangerously-skip-permissions"
 [ -n "${FABLE_MODEL:-}" ] && FABLE_CMD="claude --dangerously-skip-permissions --model \"${FABLE_MODEL}\""
 launch_ssh_agent_tab "specialist-fable" "claude" "$FABLE_CMD"
 
-echo "[launch-panes] Waiting for 'architect' and 'senior-worker' to reach idle and seeding..."
+echo "[launch-panes] Waiting for 'architect' and 'orchestrator' to reach idle and seeding..."
 if herdr agent wait architect --until idle --until done --timeout 30000 >/dev/null 2>&1; then
   herdr agent prompt architect "$(cat /workspace/.factory/architect-seed.md)" >/dev/null || true
 fi
-if herdr agent wait senior-worker --until idle --until done --timeout 30000 >/dev/null 2>&1; then
-  herdr agent prompt senior-worker "$(cat /workspace/.factory/orchestrator-seed.md)" >/dev/null || true
+if herdr agent wait orchestrator --until idle --until done --timeout 30000 >/dev/null 2>&1; then
+  herdr agent prompt orchestrator "$(cat /workspace/.factory/orchestrator-seed.md)" >/dev/null || true
 fi
 
 echo "[launch-panes] Native Herdr agents active:"
