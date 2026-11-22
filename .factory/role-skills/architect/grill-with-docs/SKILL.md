@@ -1,32 +1,66 @@
 ---
 name: grill-with-docs
-description: Interrogate requirements and surface architectural ambiguities before writing specifications.
+description: Fluid requirements alignment, strawman proposals with defaults, and targeted interrogation.
 ---
 
-# Grill With Docs (Requirements Interrogation)
+# Fluid Requirements Alignment (Grill With Docs)
 
-Before decomposing an Epic into Sub-Issues, the Architect must interrogate the requirements to eliminate assumptions and align with existing documentation.
+The goal of this skill is to eliminate architectural ambiguities without frustrating the developer.
+Keep interactions conversational, fast-track straightforward decisions with recommended defaults, and only interrogate when genuine architectural risk exists.
 
-## Operating Modes
+---
 
-### 1. Asynchronous Mode (GitHub Issue / Discussion Comment)
-When a GitHub Issue or Discussion labeled `plan` arrives:
-1. **Analyze Docs & Glossary:** Read `GLOSSARY.md`, existing schema files, and relevant documentation.
-2. **Formulate High-Leverage Questions:** Identify 3 to 5 critical questions covering:
-   - Data boundaries & invariants (e.g., entity relationships, nullability, unique constraints).
-   - Edge cases & failure states (e.g., rate limits, network failures, rollbacks).
-   - User interaction & scope (e.g., embedded components vs. hosted redirects, permissions).
-3. **Post Comment & Await User Reply:**
-   - Post the questions directly as a comment on the GitHub Issue or Discussion.
-   - Set status to awaiting user feedback. Do not proceed to wave planning until the human clarifies or approves.
+## 1. When to Engage (The Fluid Gate)
 
-### 2. Interactive Mode (CLI / Terminal TTY)
-When running locally in a terminal:
-1. Detect active TTY / stdin.
-2. Interactively prompt the developer with each question.
-3. Record responses in real-time and synthesize them directly into the Spec.
+- **Casual Discussion Mode (Default):**
+  In open GitHub Discussions, casual comments, or issues without the `plan` label, act as a helpful conversational partner. Bounce ideas, answer questions, and explore options naturally. **Do not interrogate.**
 
-## Grilling Rules
-- **Never guess user intent:** If an authentication method is not stated, ask. Do not pick one arbitrarily.
-- **Enforce Ubiquitous Language:** If the user uses a term that conflicts with `GLOSSARY.md`, explicitly confirm whether the glossary should be updated or if the standard term applies.
-- **Recommend defaults:** For every question asked, provide a recommended default answer so the user can simply reply "Accept defaults" or "Option A".
+- **Formal Alignment Mode:**
+  Engage this skill **only** when:
+  1. An issue is explicitly labeled `plan` or `ready-to-spec`.
+  2. The developer explicitly requests it (e.g., `/grill`, `/grill-me`, *"Grill me on this"*, or *"Turn this into a spec"*).
+
+- **Trivial / Bug Bypass Threshold:**
+  **Never grill on small-scope tasks.** Automatically bypass this skill if:
+  - The task is a bugfix with a known stack trace or reproduction.
+  - The task is a localized UI tweak, text copy change, dependency bump, or simple config update.
+  - In bypass cases, log `[grill: bypassed - straightforward scope]`, post the proposed plan immediately, and proceed.
+
+---
+
+## 2. The "Strawman with Defaults" Pattern (Zero-Friction)
+
+Never present the developer with a barrage of open-ended quiz questions. Instead, formulate a **Concrete Strawman Proposal** with clear recommended defaults.
+
+### Structure of a Strawman Alignment Comment:
+1. **Context & Objective:** 1 sentence confirming the core goal and checking `GLOSSARY.md`.
+2. **Proposed Architectural Choices (With Defaults):**
+   - Present 2 to 4 key technical decisions.
+   - For every decision, state your recommended default clearly (e.g., `(Recommended) Option A`).
+3. **The "LGTM" Fast-Track:**
+   Explicitly tell the developer:
+   > *"If you are happy with these defaults, reply **'LGTM'** or **'Proceed'** to lock the spec immediately. If you want to change any choice, let me know."*
+
+---
+
+## 3. Operating Modes
+
+### Asynchronous Mode (GitHub Issue / Discussion Comment)
+1. Read `GLOSSARY.md`, existing schema migrations, and relevant code.
+2. If genuine architectural ambiguity exists (e.g., new DB entity, external API boundary, permissions):
+   - Post the Strawman Proposal comment with recommended defaults and the "LGTM" fast-track.
+   - Pause and wait for human feedback. Do not slice tickets until confirmed.
+3. If the user replies with "LGTM", "Proceed", or confirms the defaults, immediately lock the Spec and transition to `to-tickets`.
+
+### Interactive Mode (CLI / Terminal TTY)
+1. When running locally in a terminal (stdin/TTY detected):
+   - Print the Strawman summary with defaults.
+   - Ask: *"Accept defaults [Y/n] or modify?"*
+   - If accepted (default: enter/Y), synthesize the Spec instantly without tedious multi-step questioning.
+
+---
+
+## 4. Golden Rules
+- **Respect Developer Velocity:** Enable 2-second alignment via "LGTM" whenever possible.
+- **Enforce Ubiquitous Language:** If the user introduces a synonym conflicting with `GLOSSARY.md` (e.g. `Tenant` vs `Organization`), note the mapping in your strawman proposal.
+- **Never Guess Silently:** Do not make hidden architectural assumptions without exposing them in your strawman defaults.
