@@ -3,6 +3,9 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const isDirectRun = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
 
 const APPS_ENV_PATH =
   process.env.FACTORY_APPS_ENV || "/run/factory-config/apps.env";
@@ -21,7 +24,12 @@ function loadEnvFile(filePath) {
     const idx = trimmed.indexOf("=");
     if (idx > 0) {
       const key = trimmed.slice(0, idx).trim();
-      let val = trimmed.slice(idx + 1).trim().replace(/^["']|["']$/g, "");
+      let val = trimmed.slice(idx + 1).trim();
+      if (!val.startsWith('"') && !val.startsWith("'")) {
+        val = val.replace(/\s+#.*$/, "").trim();
+      } else {
+        val = val.replace(/^["']|["']$/g, "");
+      }
       val = val.replace(/^\$HOME\b/, os.homedir()).replace(/^~\//, `${os.homedir()}/`);
       env[key] = val;
     }
@@ -158,25 +166,34 @@ async function refreshAll() {
   }
 }
 
-try {
-  await refreshAll();
-  if (RUN_ONCE) process.exit(0);
-} catch (err) {
-  console.error("[auth-minter] FATAL initial token mint error:", err.message);
-  process.exit(1);
-}
-
-// Adaptive schedule: retries in 60s upon network or API error, or 45 mins on success
-async function scheduleNextRefresh(delayMs) {
-  setTimeout(async () => {
+if (isDirectRun) {
+  let booted = false;
+  for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       await refreshAll();
-      scheduleNextRefresh(REFRESH_MS);
+      booted = true;
+      break;
     } catch (err) {
-      console.error("[auth-minter] ERROR refreshing tokens (retrying in 60s):", err.message);
-      scheduleNextRefresh(60 * 1000);
+      console.error(`[auth-minter] Initial token mint attempt ${attempt}/3 failed:`, err.message);
+      if (attempt < 3) await new Promise((r) => setTimeout(r, 3000));
     }
-  }, delayMs);
+  }
+
+  if (!booted) {
+    console.error("[auth-minter] FATAL initial token mint error: all 3 attempts exhausted.");
+    process.exit(1);
+  }
+
+  if (RUN_ONCE) process.exit(0);
+
+  scheduleNextRefresh(REFRESH_MS);
 }
 
-scheduleNextRefresh(REFRESH_MS);
+export {
+  loadEnvFile,
+  createAppJwt,
+  getBotUserId,
+  mintInstallationToken,
+  refreshAll,
+  writeAtomic,
+};

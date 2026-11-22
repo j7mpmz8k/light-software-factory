@@ -10,7 +10,7 @@ for _ in $(seq 1 20); do
   sleep 0.5
 done
 
-EXISTING_WS="$(herdr api snapshot | jq -r '.result.workspaces[]? | select(.label == "factory") | .workspace_id' | head -n1 || true)"
+EXISTING_WS="$(herdr api snapshot 2>/dev/null | jq -r '(.result.snapshot.workspaces[]? // .result.workspaces[]?) | select(.label == "factory") | .workspace_id' | head -n1 || true)"
 if [ -n "$EXISTING_WS" ]; then
   echo "[launch-panes] Workspace 'factory' (${EXISTING_WS}) already running — attaching to Herdr UI..."
   exec herdr
@@ -56,8 +56,8 @@ launch_ssh_agent_tab() {
   echo "[launch-panes] Note: '${name}' booting over SSH..."
 }
 
-# 3. Tab: worker-gemini (unattended mode Fix A4)
-launch_ssh_agent_tab "worker-gemini" "antigravity-cli" "agy --mode=accept-edits"
+# 3. Tab: worker-gemini (unattended mode Fix A4, kind=agy for native Herdr manifest)
+launch_ssh_agent_tab "worker-gemini" "agy" "agy --mode=accept-edits"
 
 # 4. Tab: worker-qwen (unattended --yolo Fix A4)
 launch_ssh_agent_tab "worker-qwen" "hermes" "hermes --profile qwen --yolo"

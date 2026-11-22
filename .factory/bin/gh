@@ -3,7 +3,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLEAN_PATH="$(printf '%s' "$PATH" | tr ':' '\n' | grep -Fxv "$SCRIPT_DIR" | paste -sd ':' -)"
-REAL_GH="$(PATH="$CLEAN_PATH" command -v gh)"
+REAL_GH="$(PATH="$CLEAN_PATH" command -v gh || true)"
+if [ -z "$REAL_GH" ]; then
+  echo "[factory-gh] ERROR: Real gh CLI binary not found in PATH." >&2
+  exit 1
+fi
 
 ROLE="${FACTORY_ROLE:-}"
 AUTH_ROOT="${FACTORY_AUTH_ROOT:-/run/factory-auth}"

@@ -1,7 +1,11 @@
 #!/usr/bin/env node
 import http from "node:http";
 import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { Readable, Transform, pipeline } from "node:stream";
+
+const isDirectRun = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
 
 const SECRETS_FILE =
   process.env.LLM_SECRETS_FILE ||
@@ -81,7 +85,7 @@ const ARCHITECT_PROXY_TOKEN =
 const FABLE_PROXY_TOKEN =
   process.env.FABLE_PROXY_TOKEN || secrets.FABLE_PROXY_TOKEN;
 
-if (!ARCHITECT_PROXY_TOKEN) {
+if (isDirectRun && !ARCHITECT_PROXY_TOKEN) {
   console.error("[llm-proxy] FATAL: ARCHITECT_PROXY_TOKEN is required.");
   process.exit(1);
 }
@@ -234,6 +238,7 @@ function checkRateLimit(bucket, limit) {
   if (limit <= 0) return true;
   const now = Date.now();
   const cutoff = now - 60 * 60 * 1000;
+  if (!rateBuckets[bucket]) rateBuckets[bucket] = [];
   rateBuckets[bucket] = rateBuckets[bucket].filter((ts) => ts > cutoff);
   if (rateBuckets[bucket].length >= limit) return false;
   rateBuckets[bucket].push(now);
@@ -242,7 +247,8 @@ function checkRateLimit(bucket, limit) {
 
 function joinUpstreamUrl(baseUrl, subPath) {
   let cleanSub = subPath.startsWith("/") ? subPath : `/${subPath}`;
-  if (/\/v\d+$/.test(baseUrl) && cleanSub.startsWith("/v1/")) {
+  const hasVersionOrProviderPrefix = /\/(v\d+[a-z0-9]*|openai)$/i.test(baseUrl);
+  if (hasVersionOrProviderPrefix && cleanSub.startsWith("/v1/")) {
     cleanSub = cleanSub.slice(3);
   }
   return `${baseUrl}${cleanSub}`;
@@ -481,8 +487,20 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, "0.0.0.0", () => {
-  console.log(
-    `[llm-proxy] Listening on :${PORT} | GLM->${GLM_UPSTREAM_URL} | Vision->${VISION_UPSTREAM_URL} | AnthropicProxy=${ANTHROPIC_API_KEY ? "enabled" : "oauth-mode"} | Allowed=[${[...ALLOWED_ARCHITECT_MODELS].join(", ")}] | Telemetry: GET /stats`
-  );
-});
+if (isDirectRun) {
+  server.listen(PORT, "0.0.0.0", () => {
+    console.log(
+      `[llm-proxy] Listening on :${PORT} | GLM->${GLM_UPSTREAM_URL} | Vision->${VISION_UPSTREAM_URL} | AnthropicProxy=${ANTHROPIC_API_KEY ? "enabled" : "oauth-mode"} | Allowed=[${[...ALLOWED_ARCHITECT_MODELS].join(", ")}] | Telemetry: GET /stats`
+    );
+  });
+}
+
+export {
+  server,
+  telemetry,
+  joinUpstreamUrl,
+  checkRateLimit,
+  recordUsage,
+  loadSecrets,
+  ALLOWED_ARCHITECT_MODELS,
+};

@@ -32,7 +32,7 @@ RUN curl -fsSL https://herdr.dev/install.sh | sh
 RUN herdr integration install hermes || true
 
 # Install Hermes Agent CLI
-RUN curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --non-interactive || pip install hermes-agent
+RUN curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --non-interactive || pip install --break-system-packages hermes-agent
 
 WORKDIR /workspace
 EXPOSE 8787

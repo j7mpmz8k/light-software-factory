@@ -3,8 +3,11 @@ import http from "node:http";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+
+const isDirectRun = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
 
 const execFileAsync = promisify(execFile);
 
@@ -259,6 +262,27 @@ const queue = loadQueueFromDisk();
 const pendingComments = new Map();
 let processing = false;
 let currentItemSummary = null;
+const DEAD_LETTER_FILE = path.join(STATE_DIR, "dead-letter-queue.json");
+
+function recordDeadLetter(item, reason) {
+  try {
+    let deadLetters = [];
+    if (fs.existsSync(DEAD_LETTER_FILE)) {
+      deadLetters = JSON.parse(fs.readFileSync(DEAD_LETTER_FILE, "utf8"));
+      if (!Array.isArray(deadLetters)) deadLetters = [];
+    }
+    deadLetters.push({
+      ...item,
+      failedAt: new Date().toISOString(),
+      failureReason: reason,
+    });
+    // Keep last 50 failed items
+    if (deadLetters.length > 50) deadLetters = deadLetters.slice(-50);
+    writeJsonAtomic(DEAD_LETTER_FILE, deadLetters);
+  } catch (err) {
+    console.error("[bridge] Failed to record dead letter:", err.message);
+  }
+}
 
 function sortQueue() {
   queue.sort((a, b) => {
@@ -275,6 +299,7 @@ function enqueuePrompt(promptText, opts = {}) {
     threadKey: opts.threadKey || null,
     targetPane: opts.targetPane || ARCHITECT_PANE,
     shouldClear: Boolean(opts.shouldClear),
+    attempts: 0,
     prompt: promptText,
     queuedAt: Date.now(),
   };
@@ -294,12 +319,58 @@ function enqueueOrchestratorPrompt(promptText, opts = {}) {
   enqueuePrompt(promptText, { ...opts, targetPane: ORCHESTRATOR_PANE, shouldClear: true });
 }
 
+function coalesceComment(threadKey, commentData, isPR, num) {
+  let entry = pendingComments.get(threadKey);
+  if (!entry) {
+    entry = {
+      isPR,
+      num,
+      comments: [],
+      timer: null,
+    };
+    pendingComments.set(threadKey, entry);
+  }
+
+  entry.comments.push(commentData);
+  if (entry.timer) clearTimeout(entry.timer);
+
+  entry.timer = setTimeout(() => {
+    pendingComments.delete(threadKey);
+    const commentsList = entry.comments
+      .map((c) => `- @${c.author}: "${c.body}"`)
+      .join("\n");
+    const formattedPrompt = [
+      `[GITHUB EVENT: HUMAN FEEDBACK] Comments on ${entry.isPR ? "PR" : "Issue"} #${entry.num}:`,
+      commentsList,
+    ].join("\n");
+
+    enqueueArchitectPrompt(formattedPrompt, {
+      priority: PRIORITY.HUMAN_COMMENT,
+      kind: "human_comment",
+      threadKey,
+    });
+  }, COMMENT_COALESCE_MS);
+}
+
 async function sendAndWaitAgentTurn(pane, promptText, shouldClear = false) {
+  // 1. Ensure target agent is idle before starting
+  try {
+    await execFileAsync("herdr", ["agent", "wait", pane, "--until", "idle", "--until", "done", "--timeout", "15000"]);
+  } catch {
+    console.warn(`[bridge] Agent ${pane} not currently idle; continuing dispatch...`);
+  }
+
+  // 2. Wipe LLM context if requested
   if (shouldClear) {
     console.log(`[bridge] Sending /clear to ${pane} to reset LLM context before turn...`);
     await execFileAsync("herdr", ["agent", "send-keys", pane, "/clear", "Enter"]).catch(() => {});
-    await new Promise((r) => setTimeout(r, 1000));
+    await new Promise((r) => setTimeout(r, 1500));
+    try {
+      await execFileAsync("herdr", ["agent", "wait", pane, "--until", "idle", "--until", "done", "--timeout", "5000"]);
+    } catch {}
   }
+
+  // 3. Dispatch prompt and wait for turn completion
   await execFileAsync(
     "herdr",
     [
@@ -315,7 +386,7 @@ async function sendAndWaitAgentTurn(pane, promptText, shouldClear = false) {
       "--timeout",
       String(ARCHITECT_WAIT_TIMEOUT_MS),
     ],
-    { timeout: ARCHITECT_WAIT_TIMEOUT_MS + 5_000 }
+    { timeout: ARCHITECT_WAIT_TIMEOUT_MS + 10_000 }
   );
   return { delivered: true };
 }
@@ -334,8 +405,17 @@ async function drainQueue() {
         queue.shift();
         saveQueueToDisk();
       } catch (err) {
-        console.error(`[bridge] Turn failed on ${currentItemSummary}:`, err.message);
-        break;
+        next.attempts = (next.attempts || 0) + 1;
+        console.error(`[bridge] Turn failed on ${currentItemSummary} (attempt ${next.attempts}/3):`, err.message);
+        if (next.attempts >= 3) {
+          console.error(`[bridge] Evicting item ${next.id} to dead-letter queue after 3 failed attempts.`);
+          const deadItem = queue.shift();
+          recordDeadLetter(deadItem, err.message);
+          saveQueueToDisk();
+        } else {
+          saveQueueToDisk();
+          break;
+        }
       }
     }
   } finally {
@@ -345,10 +425,11 @@ async function drainQueue() {
   }
 }
 
-function verifySignature(rawBody, sigHeader) {
-  if (!SECRET) return true;
+function verifySignature(rawBody, sigHeader, secretOverride = SECRET) {
+  const secret = secretOverride || SECRET;
+  if (!secret) return true;
   if (!sigHeader) return false;
-  const hmac = crypto.createHmac("sha256", SECRET);
+  const hmac = crypto.createHmac("sha256", secret);
   hmac.update(rawBody);
   const digest = `sha256=${hmac.digest("hex")}`;
   try {
@@ -391,7 +472,7 @@ async function handleEvent(event, payload) {
     return;
   }
 
-  // 3. Human comments (Fix B1: only authorized humans; Fix D4: quote-replies accepted)
+  // 3. Human comments (Fix B1: only authorized humans; Fix D4: quote-replies accepted; 8s coalescer)
   if (
     (event === "issue_comment" || event === "pull_request_review_comment") &&
     payload.action === "created"
@@ -405,13 +486,13 @@ async function handleEvent(event, payload) {
 
     const isPR = Boolean(payload.issue?.pull_request || payload.pull_request);
     const num = (payload.issue || payload.pull_request).number;
+    const threadKey = `${isPR ? "pr" : "issue"}:${num}`;
 
-    enqueueArchitectPrompt(
-      [
-        `[GITHUB EVENT: HUMAN FEEDBACK] @${comment.user.login} commented on ${isPR ? "PR" : "Issue"} #${num}:`,
-        `"${comment.body}"`,
-      ].join("\n"),
-      { priority: PRIORITY.HUMAN_COMMENT, kind: "human_comment", threadKey: `${isPR ? "pr" : "issue"}:${num}` }
+    coalesceComment(
+      threadKey,
+      { author: comment.user?.login || "user", body: comment.body || "" },
+      isPR,
+      num
     );
     return;
   }
@@ -526,13 +607,94 @@ async function handleEvent(event, payload) {
   }
 }
 
+// Stall Watchdog: Detect silent stalled worker tasks
+async function checkStalledIssues() {
+  try {
+    const { stdout } = await ghAsArchitect([
+      "issue",
+      "list",
+      "--state",
+      "open",
+      "--label",
+      "in-progress",
+      "--json",
+      "number,title,updatedAt",
+    ]);
+    const issues = JSON.parse(stdout || "[]");
+    const retryState = loadRetryState();
+    if (!retryState.stallAlerts) retryState.stallAlerts = {};
+    const now = Date.now();
+
+    for (const issue of issues) {
+      const updatedAt = new Date(issue.updatedAt).getTime();
+      const idleMs = now - updatedAt;
+      if (idleMs > STALL_THRESHOLD_MS) {
+        const lastAlert = retryState.stallAlerts[issue.number] || 0;
+        // Alert at most once every 2 hours per issue
+        if (now - lastAlert > 2 * 60 * 60 * 1000) {
+          retryState.stallAlerts[issue.number] = now;
+          saveRetryState(retryState);
+          const idleMins = Math.round(idleMs / 60000);
+          console.warn(`[bridge:watchdog] Detected stalled Sub-Issue #${issue.number} (idle for ${idleMins} mins).`);
+          enqueueOrchestratorPrompt(
+            `[WATCHDOG ALERT: STALLED TASK] Sub-Issue #${issue.number} ("${issue.title}") has had no activity for ${idleMins} minutes. Run 'herdr agent list' and 'herdr agent read <worker>' to inspect worker status and take action.`,
+            { priority: PRIORITY.CI_URGENT, kind: "watchdog_stall", threadKey: `issue:${issue.number}` }
+          );
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("[bridge:watchdog] Non-fatal stall check warning:", err.message);
+  }
+}
+
 // Reconciliation scan on startup (Fix D2)
 async function reconcileStartupState() {
   try {
     console.log("[bridge] Running startup reconciliation scan against GitHub...");
-    const { stdout: openPrsOut } = await ghAsArchitect(["pr", "list", "--state", "open", "--base", "staging", "--json", "number,headRefName"]);
+    // 1. Reconcile open issues needing attention
+    const { stdout: openIssuesOut } = await ghAsArchitect([
+      "issue",
+      "list",
+      "--state",
+      "open",
+      "--json",
+      "number,title,labels",
+    ]);
+    const openIssues = JSON.parse(openIssuesOut || "[]");
+    for (const issue of openIssues) {
+      const labels = (issue.labels || []).map((l) => l.name);
+      const isPlanEnqueued = queue.some((q) => q.threadKey === `issue:${issue.number}` && q.kind === "plan_request");
+      const isReadyEnqueued = queue.some((q) => q.threadKey === `issue:${issue.number}` && q.kind === "ready_dispatch");
+
+      if (labels.includes("plan") && !isPlanEnqueued) {
+        console.log(`[bridge:reconcile] Recovering unhandled 'plan' issue #${issue.number}`);
+        enqueueArchitectPrompt(
+          `[GITHUB RECONCILE: PLAN REQUEST] Issue #${issue.number} ("${issue.title}") is labeled "plan". Decompose into atomic Sub-Issues with Test Plans, link via .factory/sub-issue.sh, post Wave Blueprint, and stop.`,
+          { priority: PRIORITY.PLAN_READY, kind: "plan_request", threadKey: `issue:${issue.number}` }
+        );
+      } else if (labels.includes("ready") && !isReadyEnqueued) {
+        console.log(`[bridge:reconcile] Recovering unhandled 'ready' issue #${issue.number}`);
+        enqueueOrchestratorPrompt(
+          `[GITHUB RECONCILE: READY FOR EXECUTION] Issue #${issue.number} ("${issue.title}") is approved and labeled "ready". Decompose approved Spec via skill: to-tickets and .factory/sub-issue.sh, then dispatch Wave 1 via .factory/dispatch-worker.sh.`,
+          { priority: PRIORITY.PLAN_READY, kind: "ready_dispatch", threadKey: `issue:${issue.number}` }
+        );
+      }
+    }
+
+    // 2. Reconcile open PRs against staging
+    const { stdout: openPrsOut } = await ghAsArchitect([
+      "pr",
+      "list",
+      "--state",
+      "open",
+      "--base",
+      "staging",
+      "--json",
+      "number,headRefName",
+    ]);
     const openPrs = JSON.parse(openPrsOut || "[]");
-    console.log(`[bridge] Reconciled ${openPrs.length} open staging PR(s).`);
+    console.log(`[bridge] Reconciled ${openPrs.length} open staging PR(s) and ${openIssues.length} open issue(s).`);
   } catch (err) {
     console.warn("[bridge] Non-fatal reconciliation scan warning:", err.message);
   }
@@ -578,8 +740,28 @@ const server = http.createServer((req, res) => {
   });
 });
 
-server.listen(PORT, BIND_HOST, () => {
-  console.log(`[bridge] Listening on :${PORT} | Architect: ${ARCHITECT_PANE} | Orchestrator: ${ORCHESTRATOR_PANE} | Human Reviewer: @${HUMAN_REVIEWER || "unset"}`);
-  if (queue.length > 0) drainQueue();
-  reconcileStartupState();
-});
+let watchdogTimer = null;
+if (isDirectRun) {
+  server.listen(PORT, BIND_HOST, () => {
+    console.log(`[bridge] Listening on :${PORT} | Architect: ${ARCHITECT_PANE} | Orchestrator: ${ORCHESTRATOR_PANE} | Human Reviewer: @${HUMAN_REVIEWER || "unset"}`);
+    if (queue.length > 0) drainQueue();
+    reconcileStartupState();
+    if (STALL_WATCHDOG_INTERVAL_MS > 0) {
+      watchdogTimer = setInterval(checkStalledIssues, STALL_WATCHDOG_INTERVAL_MS);
+    }
+  });
+}
+
+export {
+  verifySignature,
+  isAgentOrBotComment,
+  isAuthorizedHuman,
+  extractLinkedIssue,
+  coalesceComment,
+  enqueuePrompt,
+  drainQueue,
+  queue,
+  pendingComments,
+  server,
+  watchdogTimer,
+};

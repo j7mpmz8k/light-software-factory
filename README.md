@@ -99,6 +99,7 @@ The factory integrates a curated suite of operational and architectural skills f
 * **Continuous Retrospective ([.factory/role-skills/architect/retro](.factory/role-skills/architect/retro/SKILL.md)):** Automated post-release retrospective updating `AGENTS.md` and syncing skills on every merge to `master`.
 * **Scheduled Codebase Hygiene ([.github/workflows/scheduled-hygiene.yml](.github/workflows/scheduled-hygiene.yml)):** Automated weekly cron audit running type checks, linters, and dependency audits in an isolated session.
 * **Clean-on-Dispatch ([.factory/dispatch-worker.sh](.factory/dispatch-worker.sh)):** Automated `/clear` wipe sent to worker panes before dispatching Sub-Issues, ensuring every ticket starts with a fresh mind.
+* **Automated Factory Verification Suite ([tests/](tests/)):** Automated unit and integration tests covering proxy rate limits, token minter JWTs, webhook signature validation, comment coalescing, priority queues, and shell scripts (`node --test tests/*.test.mjs && tests/test-scripts.sh`).
 
 ---
 

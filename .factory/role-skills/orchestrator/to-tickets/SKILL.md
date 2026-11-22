@@ -5,7 +5,7 @@ description: Decompose specifications into vertical tracer-bullet Sub-Issues and
 
 # Vertical Slicing & Wave Planning (to-tickets)
 
-Once a Spec is approved, the Architect decomposes the feature into atomic, vertical Sub-Issues organized in waves.
+Once a Spec is approved, the Factory Orchestrator decomposes the feature into atomic, vertical Sub-Issues organized in waves.
 
 ## Principles of Vertical Slicing
 

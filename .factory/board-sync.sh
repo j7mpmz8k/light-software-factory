@@ -16,7 +16,7 @@ fi
 
 ENV_FILE="${BRIDGE_ENV_FILE:-/run/factory-config/bridge.env}"
 [ ! -r "$ENV_FILE" ] && ENV_FILE=".factory/.env"
-[ -r "$ENV_FILE" ] && { set -a; source "$ENV_FILE"; set +a; }
+[ -r "$ENV_FILE" ] && { set -a; source "$ENV_FILE" 2>/dev/null || true; set +a; }
 [ -z "${PROJECT_NUMBER:-}" ] && exit 0
 
 OWNER="${PROJECT_OWNER:-@me}"
@@ -40,8 +40,9 @@ fi
 
 export GH_CONFIG_DIR="/tmp/factory-gh-config-architect"
 mkdir -p "$GH_CONFIG_DIR"
+export GH_TOKEN="$SYNC_TOKEN"
 
-REPO_URL="$(GH_TOKEN="$SYNC_TOKEN" gh repo view --json url -q .url 2>/dev/null || true)"
+REPO_URL="$(gh repo view --json url -q .url 2>/dev/null || true)"
 [ -z "$REPO_URL" ] && exit 0
 
 if [[ "$TARGET_REF" == pr:* ]]; then
@@ -55,11 +56,78 @@ else
   ITEM_URL="${REPO_URL}/issues/${TARGET_REF}"
 fi
 
-GH_TOKEN="$SYNC_TOKEN" gh project item-add "$PROJECT_NUMBER" --owner "$OWNER" --url "$ITEM_URL" >/dev/null 2>&1 || true
+# 1. Resolve Project ID and Field ID (with 1-hour cache in /tmp to minimize API calls)
+SAFE_OWNER="$(echo "$OWNER" | tr -c '[:alnum:]_' '_')"
+CACHE_FILE="/tmp/factory-proj-meta-${SAFE_OWNER}-${PROJECT_NUMBER}.json"
+NOW=$(date +%s)
+CACHE_AGE=999999
+if [ -f "$CACHE_FILE" ]; then
+  CACHE_MTIME=$(stat -c %Y "$CACHE_FILE" 2>/dev/null || echo 0)
+  CACHE_AGE=$((NOW - CACHE_MTIME))
+fi
 
-if GH_TOKEN="$SYNC_TOKEN" gh project item-edit "$PROJECT_NUMBER" --owner "$OWNER" --url "$ITEM_URL" --field "$FIELD_NAME" --value "$FIELD_VALUE" >/dev/null 2>&1; then
+if [ "$CACHE_AGE" -gt 3600 ]; then
+  PROJ_VIEW="$(gh project view "$PROJECT_NUMBER" --owner "$OWNER" --format json 2>/dev/null || true)"
+  FIELD_LIST="$(gh project field-list "$PROJECT_NUMBER" --owner "$OWNER" --format json 2>/dev/null || true)"
+  if [ -n "$PROJ_VIEW" ] && [ -n "$FIELD_LIST" ]; then
+    cat <<EOF > "$CACHE_FILE"
+{
+  "project": $PROJ_VIEW,
+  "fields": $FIELD_LIST
+}
+EOF
+  fi
+fi
+
+if [ ! -f "$CACHE_FILE" ]; then
+  echo "[board-sync] WARNING: Unable to fetch project #${PROJECT_NUMBER} metadata; continuing safely." >&2
+  exit 0
+fi
+
+PROJECT_ID="$(jq -r '.project.id // empty' "$CACHE_FILE" 2>/dev/null || true)"
+[ -z "$PROJECT_ID" ] && exit 0
+
+FIELD_JSON="$(jq -c --arg fn "$FIELD_NAME" '(.fields.fields[]? // empty) | select(.name == $fn)' "$CACHE_FILE" 2>/dev/null || true)"
+if [ -z "$FIELD_JSON" ]; then
+  echo "[board-sync] WARNING: Field '${FIELD_NAME}' not found in project #${PROJECT_NUMBER}; skipping." >&2
+  exit 0
+fi
+
+FIELD_ID="$(echo "$FIELD_JSON" | jq -r '.id')"
+DATA_TYPE="$(echo "$FIELD_JSON" | jq -r '.dataType // empty')"
+
+# 2. Add or find Item in Project
+ITEM_ID=""
+ADD_OUT="$(gh project item-add "$PROJECT_NUMBER" --owner "$OWNER" --url "$ITEM_URL" --format json 2>/dev/null || true)"
+if [ -n "$ADD_OUT" ]; then
+  ITEM_ID="$(echo "$ADD_OUT" | jq -r '.id // empty')"
+fi
+
+if [ -z "$ITEM_ID" ]; then
+  ITEM_ID="$(gh project item-list "$PROJECT_NUMBER" --owner "$OWNER" --format json --jq --arg u "$ITEM_URL" '(.items[]? | select(.content.url == $u) | .id) // empty' 2>/dev/null || true)"
+fi
+
+if [ -z "$ITEM_ID" ]; then
+  echo "[board-sync] WARNING: Could not link ${ITEM_LABEL} to project #${PROJECT_NUMBER}; skipping." >&2
+  exit 0
+fi
+
+# 3. Edit Field Value (handle SingleSelect vs Text)
+EDIT_FLAG=""
+if [ "$DATA_TYPE" = "SINGLE_SELECT" ]; then
+  OPT_ID="$(echo "$FIELD_JSON" | jq -r --arg fv "$FIELD_VALUE" '(.options[]? | select(.name == $fv) | .id) // empty')"
+  if [ -n "$OPT_ID" ]; then
+    EDIT_FLAG="--single-select-option-id ${OPT_ID}"
+  fi
+fi
+
+if [ -z "$EDIT_FLAG" ]; then
+  EDIT_FLAG="--text ${FIELD_VALUE}"
+fi
+
+if gh project item-edit --id "$ITEM_ID" --project-id "$PROJECT_ID" --field-id "$FIELD_ID" $EDIT_FLAG >/dev/null 2>&1; then
   echo "[board-sync] ${ITEM_LABEL} -> ${FIELD_NAME}: ${FIELD_VALUE}"
 else
-  echo "[board-sync] WARNING: Could not sync ${ITEM_LABEL} (${FIELD_NAME}=${FIELD_VALUE}); continuing safely." >&2
+  echo "[board-sync] WARNING: Could not update ${ITEM_LABEL} field ${FIELD_NAME}; continuing safely." >&2
 fi
 exit 0

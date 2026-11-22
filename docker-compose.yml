@@ -249,6 +249,7 @@ services:
       - ${HOME}/.config/light-factory/internal-ssh/authorized_keys:/run/factory-ssh/authorized_keys:ro
       - senior-workspace:/workspace
       - senior-hermes:/home/factory/.hermes
+      - hub-herdr:/home/factory/.config/herdr
     depends_on:
       auth-minter:
         condition: service_healthy

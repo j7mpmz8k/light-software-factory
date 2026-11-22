@@ -7,7 +7,20 @@
 set -euo pipefail
 
 CMD="${1:-}"
-REPO="${FACTORY_REPO:-$(gh repo view --json nameWithOwner -q .nameWithOwner)}"
+
+case "$CMD" in
+  link|list|parent|summary)
+    REPO="${FACTORY_REPO:-$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo "")}"
+    if [ -z "$REPO" ]; then
+      echo "[sub-issue] ERROR: FACTORY_REPO not set and unable to detect repository via gh repo view." >&2
+      exit 1
+    fi
+    ;;
+  *)
+    echo "Usage: $0 <link|list|parent|summary> <issue_num> [child_num]" >&2
+    exit 1
+    ;;
+esac
 
 case "$CMD" in
   link)
@@ -19,7 +32,7 @@ case "$CMD" in
     CHILD_NUM="${3:?child_issue_num required}"
     CHILD_ID="$(gh api "repos/${REPO}/issues/${CHILD_NUM}" --jq '.id')"
     gh api --method POST "repos/${REPO}/issues/${PARENT_NUM}/sub_issues" \
-      -F sub_issue_id="${CHILD_ID}" >/dev/null
+      --input - <<< "{\"sub_issue_id\": ${CHILD_ID}}" >/dev/null
     echo "[sub-issue] Linked Sub-Issue #${CHILD_NUM} -> Parent Epic #${PARENT_NUM}"
     ;;
 

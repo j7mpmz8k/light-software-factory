@@ -31,8 +31,11 @@ ENV HOME=/home/factory
 ENV PATH="/home/factory/.local/bin:${PATH}"
 ENV PLAYWRIGHT_BROWSERS_PATH=/home/factory/.cache/ms-playwright
 
-# Install Hermes CLI for worker-qwen
-RUN curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --non-interactive || pip install hermes-agent
+# Install Herdr CLI for Orchestrator (senior-worker)
+RUN curl -fsSL https://herdr.dev/install.sh | sh
+
+# Install Hermes CLI for worker-qwen and senior-worker
+RUN curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --non-interactive || pip install --break-system-packages hermes-agent
 
 # Install Antigravity CLI for worker-gemini
 RUN curl -fsSL https://antigravity.google/cli/install.sh | bash || true
