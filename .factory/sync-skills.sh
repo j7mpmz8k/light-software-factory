@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Usage: .factory/sync-skills.sh <architect|worker-gemini|worker-qwen|specialist-fable>
+# Usage: .factory/sync-skills.sh <architect|worker-gemini|worker-qwen|senior-worker|specialist-fable>
 set -euo pipefail
 
 AGENT_ID="${1:-${WORKER_NAME:-architect}}"
@@ -34,6 +34,9 @@ case "$AGENT_ID" in
     link_skills_into "$HOME/.gemini/config/skills" "$SHARED_DIR"
     ;;
   worker-qwen)
+    link_skills_into "$HOME/.hermes/skills" "$SHARED_DIR"
+    ;;
+  senior-worker)
     link_skills_into "$HOME/.hermes/skills" "$SHARED_DIR"
     ;;
   specialist-fable)

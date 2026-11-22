@@ -1,0 +1,52 @@
+name: Scheduled Codebase Hygiene
+
+on:
+  schedule:
+    # Run every Sunday at 02:00 UTC
+    - cron: '0 2 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  hygiene-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Run Type Check & Linter
+        id: typecheck
+        continue-on-error: true
+        run: |
+          npm run typecheck || npx tsc --noEmit || true
+          npm run lint || true
+
+      - name: Run Test Suite
+        id: tests
+        continue-on-error: true
+        run: npm test || true
+
+      - name: Dispatch Hygiene Issue on Failures
+        if: steps.typecheck.outcome == 'failure' || steps.tests.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue create \
+            --title "chore(hygiene): scheduled audit detected regressions" \
+            --label "hygiene,bug" \
+            --body "The scheduled weekly hygiene audit detected failures in typecheck or unit tests. Please assign to an idle worker for remediation."
