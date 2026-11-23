@@ -17,7 +17,7 @@ x-security-hardening: &security-hardening
   restart: unless-stopped
 
 services:
-  # 1. 1-Hour GitHub Token Minter (Uses Dockerfile.minter to fix A2 volume permissions)
+  # 1. 1-Hour GitHub Token Minter
   auth-minter:
     build:
       context: .
@@ -41,7 +41,7 @@ services:
       timeout: 3s
       retries: 12
 
-  # 2. Zero-Key LLM Proxy Sidecar
+  # 2. Zero-Key LLM Proxy Sidecar (GLM-5.3 Control Plane + Backup Worker Spend Caps)
   llm-proxy:
     image: node:22-bookworm-slim
     container_name: herdr-llm-proxy
@@ -57,15 +57,14 @@ services:
       LLM_PROXY_PORT: "4000"
       ARCHITECT_MODEL: ${ARCHITECT_MODEL:-glm-5.3}
       ARCHITECT_VISION_MODEL: ${ARCHITECT_VISION_MODEL:-glm-5.3-flash}
+      ORCHESTRATOR_MODEL: ${ORCHESTRATOR_MODEL:-glm-5.3}
       ARCHITECT_BACKUP_MODEL: ${ARCHITECT_BACKUP_MODEL:-}
       BACKUP_UPSTREAM_URL: ${BACKUP_UPSTREAM_URL:-}
       BACKUP_API_KEY: ${BACKUP_API_KEY:-}
-      SENIOR_MODEL: ${SENIOR_MODEL:-gemini-4-neon}
-      SENIOR_UPSTREAM_URL: ${SENIOR_UPSTREAM_URL:-https://generativelanguage.googleapis.com/v1beta/openai}
-      SENIOR_PROXY_TOKEN: ${SENIOR_PROXY_TOKEN:-proxy-senior-only}
+      GLM_WORKER_MODEL: ${GLM_WORKER_MODEL:-glm-5.3}
       EXTRA_ALLOWED_MODELS: ${EXTRA_ALLOWED_MODELS:-}
       ARCHITECT_PROXY_TOKEN: ${ARCHITECT_PROXY_TOKEN:-proxy-architect-only}
-      FABLE_PROXY_TOKEN: ${FABLE_PROXY_TOKEN:-proxy-fable-only}
+      GLM_WORKER_PROXY_TOKEN: ${GLM_WORKER_PROXY_TOKEN:-proxy-worker-glm-only}
     volumes:
       - ./.factory/llm-proxy.mjs:/opt/factory/llm-proxy.mjs:ro
       - ${HOME}/.config/light-factory/llm-secrets.env:/run/factory-config/llm-secrets.env:ro
@@ -75,7 +74,7 @@ services:
       timeout: 3s
       retries: 10
 
-  # 3. Isolated Multi-Worker Postgres
+  # 3. Isolated Multi-Worker Postgres (3 Dedicated Worker DBs)
   factory-postgres:
     image: ${POSTGRES_IMAGE:-postgres:16-alpine}
     container_name: herdr-factory-postgres
@@ -96,10 +95,9 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD}
       POSTGRES_DB: postgres
-      POSTGRES_GEMINI_PASSWORD: ${POSTGRES_GEMINI_PASSWORD}
+      POSTGRES_AGY_PASSWORD: ${POSTGRES_AGY_PASSWORD}
       POSTGRES_QWEN_PASSWORD: ${POSTGRES_QWEN_PASSWORD}
-      POSTGRES_SENIOR_PASSWORD: ${POSTGRES_SENIOR_PASSWORD:-senior_dev_secret_pw}
-      POSTGRES_FABLE_PASSWORD: ${POSTGRES_FABLE_PASSWORD}
+      POSTGRES_GLM_PASSWORD: ${POSTGRES_GLM_PASSWORD}
     volumes:
       - ./.factory/postgres/init-dbs.sh:/docker-entrypoint-initdb.d/01-init-dbs.sh:ro
       - postgres-data:/var/lib/postgresql/data
@@ -111,7 +109,7 @@ services:
     mem_limit: 2g
     cpus: "2.0"
 
-  # 4. Orchestrator Hub (Herdr + Architect)
+  # 4. Control Plane Hub (Herdr + Webhook Bridge + GLM-5.3 Architect & Orchestrator)
   herdr-hub:
     build:
       context: .
@@ -133,11 +131,10 @@ services:
       BRIDGE_ENV_FILE: /run/factory-config/bridge.env
       ARCHITECT_MODEL: ${ARCHITECT_MODEL:-glm-5.3}
       ARCHITECT_VISION_MODEL: ${ARCHITECT_VISION_MODEL:-glm-5.3-flash}
+      ORCHESTRATOR_MODEL: ${ORCHESTRATOR_MODEL:-glm-5.3}
       ARCHITECT_BACKUP_MODEL: ${ARCHITECT_BACKUP_MODEL:-}
       ARCHITECT_PROXY_TOKEN: ${ARCHITECT_PROXY_TOKEN:-proxy-architect-only}
-      SENIOR_MODEL: ${SENIOR_MODEL:-gemini-4-neon}
-      SENIOR_PROXY_TOKEN: ${SENIOR_PROXY_TOKEN:-proxy-senior-only}
-      FABLE_MODEL: ${FABLE_MODEL:-}
+      AGY_DEFAULT_MODEL: ${AGY_DEFAULT_MODEL:-gemini-4-hydrogen-high}
     volumes:
       - auth-architect:/run/factory-auth/architect:ro
       - ${HOME}/.config/light-factory/bridge.env:/run/factory-config/bridge.env:ro
@@ -153,31 +150,34 @@ services:
     mem_limit: 4g
     cpus: "2.0"
 
-  # 5. Primary Worker (Gemini 3.8 Flash via Antigravity CLI)
-  worker-gemini:
+  # 5. Primary Multi-Model Builder & Senior/Specialist (Antigravity CLI — AI Ultra 5x)
+  # Dynamically switches models per ticket via dispatch-worker.sh --model:
+  #   Wave 0 E2E: gemini-4-carbon-high | Routine: gemini-4-hydrogen-high
+  #   Complex:    gemini-4-neon-high   | 3-Strike Rescue: claude-opus-5-5-high / carbon
+  worker-agy:
     build:
       context: .
       dockerfile: .factory/docker/Dockerfile.worker
       args:
         FACTORY_UID: "${FACTORY_UID:-1000}"
         FACTORY_GID: "${FACTORY_GID:-1000}"
-    container_name: herdr-worker-gemini
+    container_name: herdr-worker-agy
     <<: *security-hardening
     networks:
       - factory-net
       - db-net
     environment:
-      WORKER_NAME: worker-gemini
+      WORKER_NAME: worker-agy
       FACTORY_ROLE: worker
       FACTORY_AUTH_ROOT: /run/factory-auth
       FACTORY_REPO: ${FACTORY_REPO}
-      DATABASE_URL: "postgres://worker_gemini:${POSTGRES_GEMINI_PASSWORD}@factory-postgres:5432/app_gemini"
+      DATABASE_URL: "postgres://worker_agy:${POSTGRES_AGY_PASSWORD}@factory-postgres:5432/app_agy"
     volumes:
       - auth-worker:/run/factory-auth/worker:ro
       - ${HOME}/.config/light-factory/internal-ssh/authorized_keys:/run/factory-ssh/authorized_keys:ro
-      - gemini-workspace:/workspace
-      - gemini-auth:/home/factory/.config
-      - gemini-dotgemini:/home/factory/.gemini
+      - agy-workspace:/workspace
+      - agy-auth:/home/factory/.config
+      - agy-dotgemini:/home/factory/.gemini
     depends_on:
       auth-minter:
         condition: service_healthy
@@ -186,7 +186,7 @@ services:
     mem_limit: 8g
     cpus: "4.0"
 
-  # 6. Parallel Worker (Qwen 3.8 27B via Local Inference Server)
+  # 6. Parallel Local GPU Builder (Qwen 3.8 27B via Local Inference Server — $0 Cost)
   worker-qwen:
     build:
       context: .
@@ -223,73 +223,34 @@ services:
     mem_limit: 8g
     cpus: "4.0"
 
-  # 7. Senior Worker (Hermes API — High-Capability / Relief Specialist)
-  senior-worker:
+  # 7. Cheap API Overflow & Backup Builder (GLM-5.3 via Hermes + llm-proxy)
+  worker-glm:
     build:
       context: .
       dockerfile: .factory/docker/Dockerfile.worker
       args:
         FACTORY_UID: "${FACTORY_UID:-1000}"
         FACTORY_GID: "${FACTORY_GID:-1000}"
-    container_name: herdr-senior-worker
+    container_name: herdr-worker-glm
     <<: *security-hardening
     networks:
       - factory-net
       - llm-net
       - db-net
     environment:
-      WORKER_NAME: senior-worker
+      WORKER_NAME: worker-glm
       FACTORY_ROLE: worker
       FACTORY_AUTH_ROOT: /run/factory-auth
       FACTORY_REPO: ${FACTORY_REPO}
-      DATABASE_URL: "postgres://worker_senior:${POSTGRES_SENIOR_PASSWORD:-senior_dev_secret_pw}@factory-postgres:5432/app_senior"
-      SENIOR_INFERENCE_URL: ${SENIOR_INFERENCE_URL:-http://llm-proxy:4000/senior}
-      SENIOR_MODEL: ${SENIOR_MODEL:-gemini-4-neon}
-      SENIOR_API_KEY: ${SENIOR_PROXY_TOKEN:-proxy-senior-only}
+      DATABASE_URL: "postgres://worker_glm:${POSTGRES_GLM_PASSWORD}@factory-postgres:5432/app_glm"
+      GLM_WORKER_INFERENCE_URL: http://llm-proxy:4000/worker-glm
+      GLM_WORKER_MODEL: ${GLM_WORKER_MODEL:-glm-5.3}
+      GLM_WORKER_API_KEY: ${GLM_WORKER_PROXY_TOKEN:-proxy-worker-glm-only}
     volumes:
       - auth-worker:/run/factory-auth/worker:ro
       - ${HOME}/.config/light-factory/internal-ssh/authorized_keys:/run/factory-ssh/authorized_keys:ro
-      - senior-workspace:/workspace
-      - senior-hermes:/home/factory/.hermes
-      - hub-herdr:/home/factory/.config/herdr
-    depends_on:
-      auth-minter:
-        condition: service_healthy
-      llm-proxy:
-        condition: service_healthy
-      factory-postgres:
-        condition: service_healthy
-    mem_limit: 8g
-    cpus: "4.0"
-
-  # 8. Escalation Specialist (Claude Code — IDLE 95%)
-  specialist-fable:
-    build:
-      context: .
-      dockerfile: .factory/docker/Dockerfile.worker
-      args:
-        FACTORY_UID: "${FACTORY_UID:-1000}"
-        FACTORY_GID: "${FACTORY_GID:-1000}"
-    container_name: herdr-specialist-fable
-    <<: *security-hardening
-    networks:
-      - factory-net
-      - llm-net
-      - db-net
-    environment:
-      WORKER_NAME: specialist-fable
-      FACTORY_ROLE: worker
-      FACTORY_AUTH_ROOT: /run/factory-auth
-      FACTORY_REPO: ${FACTORY_REPO}
-      DATABASE_URL: "postgres://worker_fable:${POSTGRES_FABLE_PASSWORD}@factory-postgres:5432/app_fable"
-      FABLE_AUTH_MODE: ${FABLE_AUTH_MODE:-oauth}
-      FABLE_MODEL: ${FABLE_MODEL:-}
-      FABLE_PROXY_TOKEN: ${FABLE_PROXY_TOKEN:-proxy-fable-only}
-    volumes:
-      - auth-worker:/run/factory-auth/worker:ro
-      - ${HOME}/.config/light-factory/internal-ssh/authorized_keys:/run/factory-ssh/authorized_keys:ro
-      - fable-workspace:/workspace
-      - fable-auth:/home/factory/.claude
+      - glm-workspace:/workspace
+      - glm-hermes:/home/factory/.hermes
     depends_on:
       auth-minter:
         condition: service_healthy
@@ -307,12 +268,10 @@ volumes:
   hub-workspace:
   hub-hermes:
   hub-herdr:
-  gemini-workspace:
-  gemini-auth:
-  gemini-dotgemini:
+  agy-workspace:
+  agy-auth:
+  agy-dotgemini:
   qwen-workspace:
   qwen-hermes:
-  senior-workspace:
-  senior-hermes:
-  fable-workspace:
-  fable-auth:
+  glm-workspace:
+  glm-hermes:

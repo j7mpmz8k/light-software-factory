@@ -21,11 +21,45 @@ assert_eq() {
   fi
 }
 
+assert_contains() {
+  local label="$1"
+  local needle="$2"
+  local haystack="$3"
+  if [[ "$haystack" == *"$needle"* ]]; then
+    echo "  ✔ ${label}"
+    PASSED=$((PASSED + 1))
+  else
+    echo "  ✖ ${label} (expected output to contain '${needle}', got '${haystack}')"
+    FAILED=$((FAILED + 1))
+  fi
+}
+
 echo "=== Running Factory Scripts Integration Tests ==="
 
-# 1. Test dispatch-worker.sh usage check
+# 1. Test dispatch-worker.sh usage, validation, and dynamic --model routing
 OUT="$(.factory/dispatch-worker.sh 2>&1 || true)"
-assert_eq "dispatch-worker.sh rejects missing args" "Usage: .factory/dispatch-worker.sh <worker_name> <sub_issue_prompt>" "$OUT"
+assert_eq "dispatch-worker.sh rejects missing args" "Usage: .factory/dispatch-worker.sh <worker_name> <sub_issue_prompt> [--model <model_id>] [--dry-run]" "$OUT"
+
+OUT="$(.factory/dispatch-worker.sh unknown-worker 'test prompt' --dry-run 2>&1 || true)"
+assert_contains "dispatch-worker.sh rejects unknown worker name" "Unknown worker 'unknown-worker'" "$OUT"
+
+OUT="$(.factory/dispatch-worker.sh worker-agy 'test prompt' --model 'bad;rm -rf /' --dry-run 2>&1 || true)"
+assert_contains "dispatch-worker.sh rejects shell injection in --model" "Invalid model ID" "$OUT"
+
+OUT="$(.factory/dispatch-worker.sh worker-agy 'Wave 1 routine task' --dry-run 2>&1)"
+assert_eq "dispatch-worker.sh defaults worker-agy to gemini-4-hydrogen-high" "[dispatch-worker:dry-run] worker=worker-agy model=gemini-4-hydrogen-high" "$OUT"
+
+OUT="$(.factory/dispatch-worker.sh worker-agy 'Wave 0 E2E task' --model gemini-4-carbon-high --dry-run 2>&1)"
+assert_eq "dispatch-worker.sh routes worker-agy with explicit --model carbon" "[dispatch-worker:dry-run] worker=worker-agy model=gemini-4-carbon-high" "$OUT"
+
+OUT="$(.factory/dispatch-worker.sh worker-agy 'Strike 3 rescue' --model=claude-opus-5-5-high --dry-run 2>&1)"
+assert_eq "dispatch-worker.sh supports --model= syntax for opus rescue" "[dispatch-worker:dry-run] worker=worker-agy model=claude-opus-5-5-high" "$OUT"
+
+OUT="$(.factory/dispatch-worker.sh worker-glm 'Backup overflow task' --dry-run 2>&1)"
+assert_eq "dispatch-worker.sh routes worker-glm via hermes profile" "[dispatch-worker:dry-run] worker=worker-glm model=hermes-profile" "$OUT"
+
+OUT="$(.factory/dispatch-worker.sh worker-qwen 'UI component task' --dry-run 2>&1)"
+assert_eq "dispatch-worker.sh routes worker-qwen via hermes profile" "[dispatch-worker:dry-run] worker=worker-qwen model=hermes-profile" "$OUT"
 
 # 2. Test prep-branch.sh usage check
 OUT="$(.factory/prep-branch.sh 2>&1 || true)"
@@ -57,12 +91,18 @@ EXPECTED_CRED="$(printf 'protocol=https\nhost=github.com\nusername=x-access-toke
 assert_eq "git-credential-factory.sh formats credentials correctly" "$EXPECTED_CRED" "$CRED_OUT"
 rm -rf "$MOCK_AUTH_DIR"
 
-# 8. Test sync-skills.sh linking
+# 8. Test sync-skills.sh linking across all A1 + B2 roles
 MOCK_HOME="/tmp/factory-mock-home-$$"
 mkdir -p "${MOCK_HOME}/.hermes/skills"
 HOME="$MOCK_HOME" .factory/sync-skills.sh architect
-assert_eq "sync-skills.sh links tdd skill" "true" "$([ -L "${MOCK_HOME}/.hermes/skills/tdd" ] && echo "true" || echo "false")"
-assert_eq "sync-skills.sh links grill-with-docs skill" "true" "$([ -L "${MOCK_HOME}/.hermes/skills/grill-with-docs" ] && echo "true" || echo "false")"
+HOME="$MOCK_HOME" .factory/sync-skills.sh orchestrator
+HOME="$MOCK_HOME" .factory/sync-skills.sh worker-agy
+HOME="$MOCK_HOME" .factory/sync-skills.sh worker-glm
+assert_eq "sync-skills.sh links tdd skill for architect" "true" "$([ -L "${MOCK_HOME}/.hermes/profiles/architect/skills/tdd" ] && echo "true" || echo "false")"
+assert_eq "sync-skills.sh links grill-with-docs for architect" "true" "$([ -L "${MOCK_HOME}/.hermes/profiles/architect/skills/grill-with-docs" ] && echo "true" || echo "false")"
+assert_eq "sync-skills.sh links to-tickets for orchestrator" "true" "$([ -L "${MOCK_HOME}/.hermes/profiles/orchestrator/skills/to-tickets" ] && echo "true" || echo "false")"
+assert_eq "sync-skills.sh links conflict-and-rescue for worker-agy" "true" "$([ -L "${MOCK_HOME}/.gemini/antigravity-cli/skills/conflict-and-rescue" ] && echo "true" || echo "false")"
+assert_eq "sync-skills.sh links domain-modeling for worker-glm" "true" "$([ -L "${MOCK_HOME}/.hermes/skills/domain-modeling" ] && echo "true" || echo "false")"
 rm -rf "$MOCK_HOME"
 
 echo "=== Scripts Integration Results: ${PASSED} passed, ${FAILED} failed ==="

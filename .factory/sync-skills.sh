@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Usage: .factory/sync-skills.sh <architect|worker-gemini|worker-qwen|senior-worker|specialist-fable>
+# Usage: .factory/sync-skills.sh <architect|orchestrator|worker-agy|worker-qwen|worker-glm>
 set -euo pipefail
 
 AGENT_ID="${1:-${WORKER_NAME:-architect}}"
@@ -29,12 +29,21 @@ link_skills_into() {
 case "$AGENT_ID" in
   architect)
     link_skills_into "$HOME/.hermes/skills" "$SHARED_DIR" "${ROLE_DIR}/architect"
+    link_skills_into "$HOME/.hermes/profiles/architect/skills" "$SHARED_DIR" "${ROLE_DIR}/architect"
     if command -v herdr >/dev/null 2>&1; then
-      mkdir -p "$HOME/.hermes/skills/herdr"
+      mkdir -p "$HOME/.hermes/skills/herdr" "$HOME/.hermes/profiles/architect/skills/herdr"
       herdr --skill > "$HOME/.hermes/skills/herdr/SKILL.md" 2>/dev/null || true
+      cp "$HOME/.hermes/skills/herdr/SKILL.md" "$HOME/.hermes/profiles/architect/skills/herdr/SKILL.md" 2>/dev/null || true
     fi
     ;;
-  worker-gemini)
+  orchestrator)
+    link_skills_into "$HOME/.hermes/profiles/orchestrator/skills" "$SHARED_DIR" "${ROLE_DIR}/orchestrator"
+    if command -v herdr >/dev/null 2>&1; then
+      mkdir -p "$HOME/.hermes/profiles/orchestrator/skills/herdr"
+      herdr --skill > "$HOME/.hermes/profiles/orchestrator/skills/herdr/SKILL.md" 2>/dev/null || true
+    fi
+    ;;
+  worker-agy)
     link_skills_into "$HOME/.gemini/antigravity/skills" "$SHARED_DIR"
     link_skills_into "$HOME/.gemini/antigravity-cli/skills" "$SHARED_DIR"
     link_skills_into "$HOME/.gemini/config/skills" "$SHARED_DIR"
@@ -42,17 +51,11 @@ case "$AGENT_ID" in
   worker-qwen)
     link_skills_into "$HOME/.hermes/skills" "$SHARED_DIR"
     ;;
-  orchestrator)
-    link_skills_into "$HOME/.hermes/skills" "$SHARED_DIR" "${ROLE_DIR}/orchestrator"
-    if command -v herdr >/dev/null 2>&1; then
-      mkdir -p "$HOME/.hermes/skills/herdr"
-      herdr --skill > "$HOME/.hermes/skills/herdr/SKILL.md" 2>/dev/null || true
-    fi
-    ;;
-  senior-worker)
+  worker-glm)
     link_skills_into "$HOME/.hermes/skills" "$SHARED_DIR"
     ;;
-  specialist-fable)
-    link_skills_into "$HOME/.claude/skills" "$SHARED_DIR" "${ROLE_DIR}/fable"
+  *)
+    echo "Usage: $0 <architect|orchestrator|worker-agy|worker-qwen|worker-glm>" >&2
+    exit 1
     ;;
 esac

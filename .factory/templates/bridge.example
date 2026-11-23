@@ -1,5 +1,7 @@
 # Webhook Bridge settings (read by herdr-hub on port 8787)
-PORT=8787
+WEBHOOK_PORT=8787
 FACTORY_REPO=your_github_username/your_repo_name
 HUMAN_REVIEWER=your_github_username
 GITHUB_WEBHOOK_SECRET=your_webhook_secret_here
+MAX_CI_RETRIES=3
+AGY_RESCUE_MODEL=claude-opus-5-5-high

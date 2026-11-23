@@ -14,16 +14,20 @@ Once a Spec is approved, the Factory Orchestrator decomposes the feature into at
    - **GOOD (Vertical Tracer Bullet):** Ticket 1: End-to-end "happy path" for creating an entity (DB migration + minimal API + minimal UI form). Verified by automated test.
    - Subsequent tickets add error states, secondary flows, and edge cases.
 
-2. **Wave Organization & Agent Routing:**
-   - **Wave 0 (Golden Acceptance Harness — Assigned to `senior-worker`):**
-     - Frontier reasoning model writes the deterministic black-box End-to-End Acceptance Test and mock/fixture data (e.g. CLI runner test or Playwright user journey) capturing the Epic's acceptance criteria before feature code is written.
+2. **Wave Organization & Dynamic Model Routing:**
+   - **Wave 0 (Golden Acceptance Harness — `worker-agy --model gemini-4-carbon-high`):**
+     - Frontier reasoning model writes the deterministic black-box End-to-End Acceptance Test and mock/fixture data (e.g., CLI runner test or Playwright user journey) capturing the Epic's acceptance criteria before feature code is written.
      - Runs the test to confirm it fails (RED), establishing an uncompromised external contract.
-   - **Wave 1 (Core Foundations & Tracer Bullets — Assigned to `worker-gemini` / `worker-qwen`):**
-     - Flat-rate / local builders implement core domain models, schema migrations, and happy-path logic to work toward turning the acceptance test GREEN.
-   - **Wave 2 (Secondary Flows & Edge Cases — Assigned to `worker-gemini` / `worker-qwen`):**
-     - Validation edge cases, error recovery, and unit test coverage.
-   - **Wave 3 (Full Integration Sign-off):**
-     - Verify that Wave 0's golden acceptance test and full test suite pass completely GREEN in CI with visual and CLI evidence.
+   - **Wave 1 (Core Foundations & Tracer Bullets — `worker-agy` + `worker-qwen` + `worker-glm`):**
+     - Complex backend/DB/multi-file slices $\to$ `worker-agy --model gemini-4-neon-high`.
+     - Routine backend/logic slices $\to$ `worker-agy --model gemini-4-hydrogen-high`.
+     - Parallel UI, styles, components, boilerplate $\to$ `worker-qwen` (free local GPU).
+     - Overflow / Ultra 5x quota backup $\to$ `worker-glm` (cheap GLM-5.3 API).
+   - **Wave 2 (Secondary Flows & Edge Cases):**
+     - Validation edge cases, error recovery, and unit test coverage across available builders.
+   - **Wave 3 (Full Integration Sign-off & Rescues):**
+     - Verify Wave 0's golden acceptance test and full CI suite run completely GREEN with visual/CLI evidence.
+     - Any 3-strike CI loop or semantic merge conflict escalates to `worker-agy --model claude-opus-5-5-high` (or `gemini-4-carbon-high`) for strictly 1 rescue pass.
 
 3. **Sub-Issue Execution:**
    - Call `.factory/sub-issue.sh` to generate native GitHub Sub-Issues linked to the parent Epic.
@@ -31,3 +35,4 @@ Once a Spec is approved, the Factory Orchestrator decomposes the feature into at
      - Clear acceptance criteria.
      - Target domain types referencing `GLOSSARY.md`.
      - Explicit Test Plan (Red -> Green expectation).
+     - Recommended worker and `--model` flag if targeting `worker-agy`.

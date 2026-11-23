@@ -12,14 +12,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
      > /etc/apt/sources.list.d/github-cli.list \
   && apt-get update && apt-get install -y --no-install-recommends gh \
-  && npm install -g @anthropic-ai/claude-code \
   && npx --yes playwright install-deps chromium \
   && rm -rf /var/lib/apt/lists/*
 
 RUN userdel -r node 2>/dev/null || true \
   && groupadd -f -g "${FACTORY_GID}" factory \
   && useradd -m -u "${FACTORY_UID}" -g "${FACTORY_GID}" -s /bin/bash factory \
-  && mkdir -p /workspace /home/factory/.ssh /home/factory/.hermes /home/factory/.config /home/factory/.gemini /home/factory/.claude /home/factory/.cache/ms-playwright \
+  && mkdir -p /workspace /home/factory/.ssh /home/factory/.hermes /home/factory/.config /home/factory/.gemini /home/factory/.cache/ms-playwright \
   && chown -R factory:factory /workspace /home/factory
 
 COPY .factory/docker/bootstrap-workspace.sh /usr/local/bin/bootstrap-workspace.sh
@@ -31,13 +30,10 @@ ENV HOME=/home/factory
 ENV PATH="/home/factory/.local/bin:${PATH}"
 ENV PLAYWRIGHT_BROWSERS_PATH=/home/factory/.cache/ms-playwright
 
-# Install Herdr CLI for Orchestrator (senior-worker)
-RUN curl -fsSL https://herdr.dev/install.sh | sh
-
-# Install Hermes CLI for worker-qwen and senior-worker
+# Install Hermes CLI for worker-qwen and worker-glm
 RUN curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --non-interactive || pip install --break-system-packages hermes-agent
 
-# Install Antigravity CLI for worker-gemini
+# Install Antigravity CLI for worker-agy (multi-model Gemini 4 + Claude Opus 5.5)
 RUN curl -fsSL https://antigravity.google/cli/install.sh | bash || true
 
 WORKDIR /workspace

@@ -5,6 +5,10 @@ set -euo pipefail
 source /workspace/.factory/enter-role.sh architect
 /workspace/.factory/sync-hub.sh || true
 
+HERDR_STATE_DIR="${HERDR_STATE_DIR:-$HOME/.config/herdr}"
+AGY_DEFAULT_MODEL="${AGY_DEFAULT_MODEL:-gemini-4-hydrogen-high}"
+mkdir -p "$HERDR_STATE_DIR"
+
 for _ in $(seq 1 20); do
   herdr api snapshot >/dev/null 2>&1 && break
   sleep 0.5
@@ -16,9 +20,9 @@ if [ -n "$EXISTING_WS" ]; then
   exec herdr
 fi
 
-echo "[launch-panes] Bootstrapping native Herdr workspace 'factory' with 6 tabs..."
+echo "[launch-panes] Bootstrapping native Herdr workspace 'factory' with 6 tabs (A1 + B2 architecture)..."
 
-# 1. Create workspace + root tab for bridge
+# 1. Tab: bridge (Webhook Bridge + Priority Queue + Strike Circuit Breaker)
 WS_JSON="$(herdr workspace create --cwd /workspace --label factory --focus)"
 WS_ID="$(echo "$WS_JSON" | jq -r '.result.workspace.workspace_id')"
 BRIDGE_TAB="$(echo "$WS_JSON" | jq -r '.result.tab.tab_id')"
@@ -27,19 +31,19 @@ herdr tab rename "$BRIDGE_TAB" bridge >/dev/null
 herdr pane rename "$BRIDGE_PANE" bridge >/dev/null
 herdr pane run "$BRIDGE_PANE" "node /workspace/.factory/webhook-bridge.mjs" >/dev/null
 
-# 2. Tab: architect (Chief Architect inside herdr-hub)
+# 2. Tab: architect (Chief Architect inside herdr-hub — GLM-5.3)
 ARCH_TAB="$(herdr tab create --workspace "$WS_ID" --cwd /workspace --label architect --focus)"
 ARCH_PANE="$(echo "$ARCH_TAB" | jq -r '.result.root_pane.pane_id')"
 herdr pane rename "$ARCH_PANE" architect >/dev/null
 herdr agent start architect --kind hermes --pane "$ARCH_PANE" -- --profile architect >/dev/null
 
-# 3. Tab: orchestrator (Factory Orchestrator inside herdr-hub)
+# 3. Tab: orchestrator (Factory Orchestrator inside herdr-hub — GLM-5.3 + Vision)
 ORCH_TAB="$(herdr tab create --workspace "$WS_ID" --cwd /workspace --label orchestrator --no-focus)"
 ORCH_PANE="$(echo "$ORCH_TAB" | jq -r '.result.root_pane.pane_id')"
 herdr pane rename "$ORCH_PANE" orchestrator >/dev/null
 herdr agent start orchestrator --kind hermes --pane "$ORCH_PANE" -- --profile orchestrator >/dev/null
 
-# Helper: launch SSH agent tab with bash -lic (Fix A3) and unattended execution (Fix A4)
+# Helper: launch SSH agent tab with bash -lic and unattended execution
 launch_ssh_agent_tab() {
   local name="$1"
   local kind="$2"
@@ -49,7 +53,8 @@ launch_ssh_agent_tab() {
   tab_json="$(herdr tab create --workspace "$WS_ID" --cwd /workspace --label "$name" --no-focus)"
   pane_id="$(echo "$tab_json" | jq -r '.result.root_pane.pane_id')"
   herdr pane rename "$pane_id" "$name" >/dev/null
-  # Wrap with bash -lic so .worker-env.sh and .bashrc are sourced cleanly on remote side (Fix A3)
+  printf '%s\n' "$pane_id" > "${HERDR_STATE_DIR}/${name}.pane_id"
+
   herdr pane run "$pane_id" "HERDR_AGENT=${kind} ssh -t ${name} \"bash -lic '${remote_cmd}'\"" >/dev/null
 
   for _ in $(seq 1 20); do
@@ -62,19 +67,15 @@ launch_ssh_agent_tab() {
   echo "[launch-panes] Note: '${name}' booting over SSH..."
 }
 
-# 3. Tab: worker-gemini (unattended mode Fix A4, kind=agy for native Herdr manifest)
-launch_ssh_agent_tab "worker-gemini" "agy" "agy --mode=accept-edits"
+# 4. Tab: worker-agy (Dynamic multi-model Antigravity CLI — Carbon / Neon / Hydrogen / Opus 5.5)
+printf '%s\n' "$AGY_DEFAULT_MODEL" > "${HERDR_STATE_DIR}/worker-agy.model"
+launch_ssh_agent_tab "worker-agy" "agy" "agy --model ${AGY_DEFAULT_MODEL} --mode=accept-edits"
 
-# 4. Tab: worker-qwen (unattended --yolo Fix A4)
+# 5. Tab: worker-qwen (Free Local GPU builder)
 launch_ssh_agent_tab "worker-qwen" "hermes" "hermes --profile qwen --yolo"
 
-# 5. Tab: senior-worker (unattended Hermes API relief worker)
-launch_ssh_agent_tab "senior-worker" "hermes" "hermes --profile senior --yolo"
-
-# 6. Tab: specialist-fable (unattended --dangerously-skip-permissions Fix A4)
-FABLE_CMD="claude --dangerously-skip-permissions"
-[ -n "${FABLE_MODEL:-}" ] && FABLE_CMD="claude --dangerously-skip-permissions --model \"${FABLE_MODEL}\""
-launch_ssh_agent_tab "specialist-fable" "claude" "$FABLE_CMD"
+# 6. Tab: worker-glm (Cheap GLM-5.3 API backup & overflow builder)
+launch_ssh_agent_tab "worker-glm" "hermes" "hermes --profile glm --yolo"
 
 echo "[launch-panes] Waiting for 'architect' and 'orchestrator' to reach idle and seeding..."
 if herdr agent wait architect --until idle --until done --timeout 30000 >/dev/null 2>&1; then

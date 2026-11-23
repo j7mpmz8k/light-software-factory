@@ -6,6 +6,7 @@ import {
   isAgentOrBotComment,
   isAuthorizedHuman,
   extractLinkedIssue,
+  classifyCiFailure,
   coalesceComment,
   queue,
   pendingComments,
@@ -92,5 +93,14 @@ describe("Webhook Bridge Unit Tests", () => {
     assert.equal(items[1].kind, "ci_urgent");     // Priority 20
     assert.equal(items[2].kind, "review_wave");   // Priority 30
     assert.equal(items[3].kind, "plan_request");   // Priority 40
+  });
+
+  test("classifyCiFailure enforces 3-strike rescue escalation and spend circuit breaker", () => {
+    assert.equal(classifyCiFailure(1, false, 3), "retry");
+    assert.equal(classifyCiFailure(2, false, 3), "retry");
+    assert.equal(classifyCiFailure(3, false, 3), "escalate_rescue");
+    assert.equal(classifyCiFailure(4, false, 3), "circuit_breaker");
+    // Already escalated once: any subsequent failure trips circuit breaker immediately
+    assert.equal(classifyCiFailure(1, true, 3), "circuit_breaker");
   });
 });

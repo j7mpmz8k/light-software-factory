@@ -6,17 +6,9 @@ import { joinUpstreamUrl, checkRateLimit, recordUsage, telemetry } from "../.fac
 describe("LLM Proxy Unit & Integration Tests", () => {
   let mockUpstream;
   let mockPort;
-  let lastUpstreamReq = null;
 
   before(async () => {
-    // Spin up mock upstream server
     mockUpstream = http.createServer((req, res) => {
-      lastUpstreamReq = {
-        url: req.url,
-        method: req.method,
-        headers: req.headers,
-      };
-
       if (req.url === "/chat/completions" || req.url === "/v1/chat/completions") {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(
@@ -52,37 +44,42 @@ describe("LLM Proxy Unit & Integration Tests", () => {
       "https://api.z.ai/api/coding/paas/v4/chat/completions"
     );
     assert.equal(
-      joinUpstreamUrl("https://generativelanguage.googleapis.com/v1beta/openai", "/v1/chat/completions"),
-      "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
-    );
-    assert.equal(
       joinUpstreamUrl("http://host.docker.internal:11434/v1", "/v1/chat/completions"),
       "http://host.docker.internal:11434/v1/chat/completions"
     );
     assert.equal(
-      joinUpstreamUrl("https://api.anthropic.com", "/v1/messages"),
-      "https://api.anthropic.com/v1/messages"
+      joinUpstreamUrl("https://api.deepseek.com", "/v1/chat/completions"),
+      "https://api.deepseek.com/v1/chat/completions"
     );
   });
 
-  test("checkRateLimit tracks and enforces hourly limits", () => {
-    const bucket = "test-bucket-" + Date.now();
-    // Default limit allows 5 calls
-    assert.equal(checkRateLimit(bucket, 3), true);
-    assert.equal(checkRateLimit(bucket, 3), true);
-    assert.equal(checkRateLimit(bucket, 3), true);
-    // 4th call should be blocked
-    assert.equal(checkRateLimit(bucket, 3), false);
+  test("checkRateLimit tracks and enforces isolated hourly limits", () => {
+    const hubBucket = "test-hub-" + Date.now();
+    const workerBucket = "test-worker-glm-" + Date.now();
+
+    assert.equal(checkRateLimit(hubBucket, 2), true);
+    assert.equal(checkRateLimit(hubBucket, 2), true);
+    assert.equal(checkRateLimit(hubBucket, 2), false);
+
+    // Worker bucket remains isolated from hub bucket
+    assert.equal(checkRateLimit(workerBucket, 2), true);
+    assert.equal(checkRateLimit(workerBucket, 2), true);
+    assert.equal(checkRateLimit(workerBucket, 2), false);
   });
 
-  test("recordUsage tracks prompt, completion, and total tokens in telemetry", () => {
+  test("recordUsage tracks prompt, completion, and total tokens for both hub glm and workerGlm routes", () => {
     recordUsage("glm", "glm-5.3", 100, 50, 150);
     assert.ok(telemetry.routes.glm.promptTokens >= 100);
     assert.ok(telemetry.routes.glm.completionTokens >= 50);
     assert.ok(telemetry.routes.glm.totalTokens >= 150);
+
+    recordUsage("workerGlm", "glm-5.3", 200, 80, 280);
+    assert.ok(telemetry.routes.workerGlm.promptTokens >= 200);
+    assert.ok(telemetry.routes.workerGlm.completionTokens >= 80);
+    assert.ok(telemetry.routes.workerGlm.totalTokens >= 280);
   });
 
-  test("GET /health endpoint responds on proxy", async () => {
+  test("GET /health endpoint responds on proxy when active", async () => {
     const res = await fetch("http://127.0.0.1:4000/health").catch(() => null);
     if (res) {
       assert.equal(res.status, 200);
@@ -91,7 +88,7 @@ describe("LLM Proxy Unit & Integration Tests", () => {
     }
   });
 
-  test("GET /stats endpoint responds with telemetry and rolling limits", async () => {
+  test("GET /stats endpoint responds with telemetry and rolling limits when active", async () => {
     const res = await fetch("http://127.0.0.1:4000/stats").catch(() => null);
     if (res) {
       assert.equal(res.status, 200);

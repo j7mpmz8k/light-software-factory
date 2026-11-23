@@ -50,7 +50,7 @@ const BIND_HOST = process.env.WEBHOOK_BIND_HOST || "0.0.0.0";
 const SECRET = process.env.GITHUB_WEBHOOK_SECRET || "";
 const ARCHITECT_PANE = process.env.ARCHITECT_PANE || "architect";
 const ORCHESTRATOR_PANE = process.env.ORCHESTRATOR_PANE || "orchestrator";
-const FABLE_PANE = process.env.FABLE_PANE || "specialist-fable";
+const AGY_RESCUE_MODEL = process.env.AGY_RESCUE_MODEL || "claude-opus-5-5-high";
 const MAX_CI_RETRIES = Number(process.env.MAX_CI_RETRIES || 3);
 const CI_WORKFLOW_NAME = process.env.CI_WORKFLOW_NAME || "CI & PR Evidence";
 const PROJECT_NUMBER = process.env.PROJECT_NUMBER || "";
@@ -202,7 +202,7 @@ async function inspectPrMeta(prNumber, headBranch = "") {
     return {
       linkedIssue: extractLinkedIssue(pr.body, pr.headRefName || headBranch),
       labels,
-      hasFableEscalated: labels.includes("fable-escalated"),
+      hasRescueEscalated: labels.includes("rescue-escalated"),
       hasHumanGateLabel: labels.includes("human-gate"),
       humanGateBlocked,
       isConflicting: pr.mergeable === "CONFLICTING" || pr.mergeStateStatus === "DIRTY",
@@ -213,7 +213,7 @@ async function inspectPrMeta(prNumber, headBranch = "") {
     return {
       linkedIssue: extractLinkedIssue("", headBranch),
       labels: [],
-      hasFableEscalated: false,
+      hasRescueEscalated: false,
       hasHumanGateLabel: false,
       humanGateBlocked: false,
       isConflicting: false,
@@ -221,6 +221,12 @@ async function inspectPrMeta(prNumber, headBranch = "") {
       baseRefName: "",
     };
   }
+}
+
+function classifyCiFailure(strikes, hasRescueEscalated = false, maxRetries = MAX_CI_RETRIES) {
+  if (hasRescueEscalated || strikes > maxRetries) return "circuit_breaker";
+  if (strikes === maxRetries) return "escalate_rescue";
+  return "retry";
 }
 
 function writeJsonAtomic(filePath, data) {
@@ -465,7 +471,8 @@ async function handleEvent(event, payload) {
     enqueueOrchestratorPrompt(
       [
         `[GITHUB EVENT: READY FOR EXECUTION] Issue #${issue.number} ("${issue.title}") was approved and labeled "ready".`,
-        `Decompose this approved Spec into atomic Sub-Issues via skill: to-tickets and .factory/sub-issue.sh, then dispatch Wave 1 to idle workers using .factory/dispatch-worker.sh.`,
+        `Decompose this approved Spec into atomic Sub-Issues via skill: to-tickets and .factory/sub-issue.sh.`,
+        `Dispatch Wave 0 (Golden Acceptance Harness) to worker-agy using '.factory/dispatch-worker.sh worker-agy "<prompt>" --model gemini-4-carbon-high' (or dispatch Wave 1 directly if trivial).`,
       ].join("\n"),
       { priority: PRIORITY.PLAN_READY, kind: "ready_dispatch", threadKey: `issue:${issue.number}` }
     );
@@ -585,11 +592,40 @@ async function handleEvent(event, payload) {
     const prMeta = await inspectPrMeta(prNumber, run.head_branch);
 
     if (run.conclusion === "failure") {
-      enqueueOrchestratorPrompt(
-        `[GITHUB EVENT: CI FAILED] PR #${prNumber} failed CI run #${run.id}. Dispatch fix to assigned worker via .factory/dispatch-worker.sh.`,
-        { priority: PRIORITY.CI_URGENT, kind: "ci_failed", threadKey: `pr:${prNumber}` }
-      );
+      const retryState = loadRetryState();
+      if (!retryState.prRetries) retryState.prRetries = {};
+      const strikes = (retryState.prRetries[prNumber] || 0) + 1;
+      retryState.prRetries[prNumber] = strikes;
+      saveRetryState(retryState);
+
+      const action = classifyCiFailure(strikes, prMeta.hasRescueEscalated, MAX_CI_RETRIES);
+      if (action === "circuit_breaker") {
+        console.warn(`[bridge:circuit-breaker] PR #${prNumber} failed after rescue escalation (strike ${strikes}). Halting auto-retries.`);
+        await ghAsArchitect(["pr", "edit", String(prNumber), "--add-label", "blocked"]).catch(() => {});
+        if (prMeta.linkedIssue) await syncBoardField(prMeta.linkedIssue, "Status", "Blocked");
+        await syncBoardField(`pr:${prNumber}`, "Status", "Blocked");
+        enqueueArchitectPrompt(
+          `[CIRCUIT BREAKER: PR BLOCKED] PR #${prNumber} failed CI again after Senior/Specialist rescue (strike ${strikes}, run #${run.id}). Automated retries are HALTED to protect quota/credits. Post a concise diagnostic summary for the human owner and STOP.`,
+          { priority: PRIORITY.CI_URGENT, kind: "ci_blocked", threadKey: `pr:${prNumber}` }
+        );
+      } else if (action === "escalate_rescue") {
+        await ghAsArchitect(["pr", "edit", String(prNumber), "--add-label", "rescue-escalated"]).catch(() => {});
+        enqueueOrchestratorPrompt(
+          `[GITHUB EVENT: CI FAILED — STRIKE ${strikes}/${MAX_CI_RETRIES} ESCALATION] PR #${prNumber} failed CI run #${run.id} (${strikes} consecutive failures). Dispatch a 1-pass Specialist Rescue to worker-agy with '--model ${AGY_RESCUE_MODEL}' (or '--model gemini-4-carbon-high') via .factory/dispatch-worker.sh using skill: conflict-and-rescue.`,
+          { priority: PRIORITY.CI_URGENT, kind: "ci_rescue", threadKey: `pr:${prNumber}` }
+        );
+      } else {
+        enqueueOrchestratorPrompt(
+          `[GITHUB EVENT: CI FAILED — STRIKE ${strikes}/${MAX_CI_RETRIES}] PR #${prNumber} failed CI run #${run.id}. Dispatch targeted fix to the assigned worker via .factory/dispatch-worker.sh.`,
+          { priority: PRIORITY.CI_URGENT, kind: "ci_failed", threadKey: `pr:${prNumber}` }
+        );
+      }
     } else if (run.conclusion === "success") {
+      const retryState = loadRetryState();
+      if (retryState.prRetries && retryState.prRetries[prNumber]) {
+        delete retryState.prRetries[prNumber];
+        saveRetryState(retryState);
+      }
       if (prMeta.humanGateBlocked || prMeta.hasHumanGateLabel) {
         await surfaceAwaitingApproval(prNumber, prMeta.linkedIssue, prMeta.baseRefName === "master");
         enqueueOrchestratorPrompt(
@@ -676,7 +712,7 @@ async function reconcileStartupState() {
       } else if (labels.includes("ready") && !isReadyEnqueued) {
         console.log(`[bridge:reconcile] Recovering unhandled 'ready' issue #${issue.number}`);
         enqueueOrchestratorPrompt(
-          `[GITHUB RECONCILE: READY FOR EXECUTION] Issue #${issue.number} ("${issue.title}") is approved and labeled "ready". Decompose approved Spec via skill: to-tickets and .factory/sub-issue.sh, then dispatch Wave 1 via .factory/dispatch-worker.sh.`,
+          `[GITHUB RECONCILE: READY FOR EXECUTION] Issue #${issue.number} ("${issue.title}") is approved and labeled "ready". Decompose approved Spec via skill: to-tickets and .factory/sub-issue.sh, then dispatch Wave 0 to worker-agy (--model gemini-4-carbon-high) or Wave 1 via .factory/dispatch-worker.sh.`,
           { priority: PRIORITY.PLAN_READY, kind: "ready_dispatch", threadKey: `issue:${issue.number}` }
         );
       }
@@ -757,6 +793,7 @@ export {
   isAgentOrBotComment,
   isAuthorizedHuman,
   extractLinkedIssue,
+  classifyCiFailure,
   coalesceComment,
   enqueuePrompt,
   drainQueue,

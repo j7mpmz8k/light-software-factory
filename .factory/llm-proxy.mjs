@@ -57,33 +57,19 @@ const BACKUP_UPSTREAM_URL = (
 const BACKUP_API_KEY =
   secrets.BACKUP_API_KEY || process.env.BACKUP_API_KEY || GLM_API_KEY;
 
-const SENIOR_UPSTREAM_URL = (
-  secrets.SENIOR_UPSTREAM_URL ||
-  process.env.SENIOR_UPSTREAM_URL ||
-  "https://generativelanguage.googleapis.com/v1beta/openai"
+const GLM_WORKER_UPSTREAM_URL = (
+  secrets.GLM_WORKER_UPSTREAM_URL ||
+  process.env.GLM_WORKER_UPSTREAM_URL ||
+  GLM_UPSTREAM_URL
 ).replace(/\/+$/, "");
-const SENIOR_API_KEY =
-  secrets.SENIOR_API_KEY ||
-  secrets.GEMINI_API_KEY ||
-  process.env.SENIOR_API_KEY ||
-  process.env.GEMINI_API_KEY ||
-  "";
-const SENIOR_PROXY_TOKEN =
-  process.env.SENIOR_PROXY_TOKEN || secrets.SENIOR_PROXY_TOKEN || "proxy-senior-only";
+const GLM_WORKER_API_KEY =
+  secrets.GLM_WORKER_API_KEY || process.env.GLM_WORKER_API_KEY || GLM_API_KEY;
 
-const ANTHROPIC_UPSTREAM_URL = (
-  secrets.ANTHROPIC_UPSTREAM_URL ||
-  process.env.ANTHROPIC_UPSTREAM_URL ||
-  "https://api.anthropic.com"
-).replace(/\/+$/, "");
-const ANTHROPIC_API_KEY =
-  secrets.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY || "";
-
-// Require proxy tokens (reject weak defaults in production)
+// Require proxy tokens (reject missing token in production)
 const ARCHITECT_PROXY_TOKEN =
   process.env.ARCHITECT_PROXY_TOKEN || secrets.ARCHITECT_PROXY_TOKEN;
-const FABLE_PROXY_TOKEN =
-  process.env.FABLE_PROXY_TOKEN || secrets.FABLE_PROXY_TOKEN;
+const GLM_WORKER_PROXY_TOKEN =
+  process.env.GLM_WORKER_PROXY_TOKEN || secrets.GLM_WORKER_PROXY_TOKEN || "proxy-worker-glm-only";
 
 if (isDirectRun && !ARCHITECT_PROXY_TOKEN) {
   console.error("[llm-proxy] FATAL: ARCHITECT_PROXY_TOKEN is required.");
@@ -93,16 +79,17 @@ if (isDirectRun && !ARCHITECT_PROXY_TOKEN) {
 const GLM_MAX_REQ_PER_HOUR = Number(
   secrets.GLM_MAX_REQ_PER_HOUR || process.env.GLM_MAX_REQ_PER_HOUR || 240
 );
-const FABLE_MAX_REQ_PER_HOUR = Number(
-  secrets.FABLE_MAX_REQ_PER_HOUR || process.env.FABLE_MAX_REQ_PER_HOUR || 60
+const GLM_WORKER_MAX_REQ_PER_HOUR = Number(
+  secrets.GLM_WORKER_MAX_REQ_PER_HOUR || process.env.GLM_WORKER_MAX_REQ_PER_HOUR || 180
 );
 
 const ALLOWED_ARCHITECT_MODELS = new Set(
   [
     process.env.ARCHITECT_MODEL,
     process.env.ARCHITECT_VISION_MODEL,
+    process.env.ORCHESTRATOR_MODEL,
     process.env.ARCHITECT_BACKUP_MODEL,
-    process.env.SENIOR_MODEL,
+    process.env.GLM_WORKER_MODEL,
     ...(process.env.EXTRA_ALLOWED_MODELS || "").split(","),
   ]
     .map((s) => (s || "").trim())
@@ -111,7 +98,7 @@ const ALLOWED_ARCHITECT_MODELS = new Set(
 
 const rateBuckets = {
   glm: [],
-  fable: [],
+  workerGlm: [],
 };
 
 function emptyRouteStats() {
@@ -133,8 +120,7 @@ const telemetry = {
     glm: emptyRouteStats(),
     vision: emptyRouteStats(),
     backup: emptyRouteStats(),
-    senior: emptyRouteStats(),
-    anthropic: emptyRouteStats(),
+    workerGlm: emptyRouteStats(),
   },
 };
 
@@ -307,7 +293,7 @@ const server = http.createServer(async (req, res) => {
       routes: {
         glm: Boolean(GLM_UPSTREAM_URL),
         vision: Boolean(VISION_UPSTREAM_URL),
-        anthropic: Boolean(ANTHROPIC_API_KEY),
+        workerGlm: Boolean(GLM_WORKER_UPSTREAM_URL),
       },
       allowedArchitectModels: [...ALLOWED_ARCHITECT_MODELS],
     });
@@ -319,10 +305,10 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 200, {
       ...telemetry,
       rollingLastHour: {
-        glmAndVisionRequests: rateBuckets.glm.filter((ts) => ts > cutoff).length,
-        glmMaxPerHour: GLM_MAX_REQ_PER_HOUR,
-        fableRequests: rateBuckets.fable.filter((ts) => ts > cutoff).length,
-        fableMaxPerHour: FABLE_MAX_REQ_PER_HOUR,
+        hubGlmAndVisionRequests: rateBuckets.glm.filter((ts) => ts > cutoff).length,
+        hubGlmMaxPerHour: GLM_MAX_REQ_PER_HOUR,
+        workerGlmRequests: rateBuckets.workerGlm.filter((ts) => ts > cutoff).length,
+        workerGlmMaxPerHour: GLM_WORKER_MAX_REQ_PER_HOUR,
       },
     });
   }
@@ -338,14 +324,11 @@ const server = http.createServer(async (req, res) => {
   } else if (rawUrl === "/backup" || rawUrl.startsWith("/backup/")) {
     route = "backup";
     subPath = rawUrl.slice("/backup".length) || "/";
-  } else if (rawUrl === "/senior" || rawUrl.startsWith("/senior/")) {
-    route = "senior";
-    subPath = rawUrl.slice("/senior".length) || "/";
-  } else if (rawUrl === "/anthropic" || rawUrl.startsWith("/anthropic/")) {
-    route = "anthropic";
-    subPath = rawUrl.slice("/anthropic".length) || "/";
+  } else if (rawUrl === "/worker-glm" || rawUrl.startsWith("/worker-glm/")) {
+    route = "workerGlm";
+    subPath = rawUrl.slice("/worker-glm".length) || "/";
   } else {
-    return sendJson(res, 404, { error: "Unknown proxy route. Use /glm, /vision, /backup, /senior, /anthropic, /health, or /stats." });
+    return sendJson(res, 404, { error: "Unknown proxy route. Use /glm, /vision, /backup, /worker-glm, /health, or /stats." });
   }
 
   // Answer Hermes probe endpoints locally without charging hourly quota or failing upstream
@@ -356,35 +339,22 @@ const server = http.createServer(async (req, res) => {
   }
 
   const incomingAuth = String(req.headers["authorization"] || "");
-  const incomingXApiKey = String(req.headers["x-api-key"] || "");
 
   if (route === "glm" || route === "vision" || route === "backup") {
     if (incomingAuth !== `Bearer ${ARCHITECT_PROXY_TOKEN}`) {
-      return sendJson(res, 401, { error: "Unauthorized for architect LLM route" });
+      return sendJson(res, 401, { error: "Unauthorized for hub LLM route" });
     }
     if (!checkRateLimit("glm", GLM_MAX_REQ_PER_HOUR)) {
       telemetry.routes[route].rateLimited += 1;
-      return sendJson(res, 429, { error: `Architect hourly limit (${GLM_MAX_REQ_PER_HOUR}/hr) exceeded` });
+      return sendJson(res, 429, { error: `Hub GLM hourly limit (${GLM_MAX_REQ_PER_HOUR}/hr) exceeded` });
     }
-  } else if (route === "senior") {
-    if (incomingAuth !== `Bearer ${SENIOR_PROXY_TOKEN}`) {
-      return sendJson(res, 401, { error: "Unauthorized for senior worker route" });
+  } else if (route === "workerGlm") {
+    if (incomingAuth !== `Bearer ${GLM_WORKER_PROXY_TOKEN}`) {
+      return sendJson(res, 401, { error: "Unauthorized for worker-glm route" });
     }
-  } else if (route === "anthropic") {
-    if (!ANTHROPIC_API_KEY) {
-      return sendJson(res, 503, {
-        error: "Anthropic proxy disabled (ANTHROPIC_API_KEY unset; using Claude Code OAuth mode)",
-      });
-    }
-    const valid =
-      (FABLE_PROXY_TOKEN && incomingXApiKey === FABLE_PROXY_TOKEN) ||
-      (FABLE_PROXY_TOKEN && incomingAuth === `Bearer ${FABLE_PROXY_TOKEN}`);
-    if (!valid) {
-      return sendJson(res, 401, { error: "Unauthorized for Fable Anthropic route" });
-    }
-    if (!checkRateLimit("fable", FABLE_MAX_REQ_PER_HOUR)) {
-      telemetry.routes.anthropic.rateLimited += 1;
-      return sendJson(res, 429, { error: `Fable hourly limit (${FABLE_MAX_REQ_PER_HOUR}/hr) exceeded` });
+    if (!checkRateLimit("workerGlm", GLM_WORKER_MAX_REQ_PER_HOUR)) {
+      telemetry.routes.workerGlm.rateLimited += 1;
+      return sendJson(res, 429, { error: `worker-glm hourly limit (${GLM_WORKER_MAX_REQ_PER_HOUR}/hr) exceeded` });
     }
   }
 
@@ -403,7 +373,6 @@ const server = http.createServer(async (req, res) => {
     } catch {}
 
     if (
-      (route === "glm" || route === "vision" || route === "backup" || route === "senior") &&
       ALLOWED_ARCHITECT_MODELS.size > 0 &&
       requestedModel &&
       !ALLOWED_ARCHITECT_MODELS.has(requestedModel)
@@ -433,12 +402,9 @@ const server = http.createServer(async (req, res) => {
   } else if (route === "backup") {
     targetUrl = joinUpstreamUrl(BACKUP_UPSTREAM_URL, subPath);
     if (BACKUP_API_KEY) outHeaders["authorization"] = `Bearer ${BACKUP_API_KEY}`;
-  } else if (route === "senior") {
-    targetUrl = joinUpstreamUrl(SENIOR_UPSTREAM_URL, subPath);
-    if (SENIOR_API_KEY) outHeaders["authorization"] = `Bearer ${SENIOR_API_KEY}`;
-  } else if (route === "anthropic") {
-    targetUrl = joinUpstreamUrl(ANTHROPIC_UPSTREAM_URL, subPath);
-    outHeaders["x-api-key"] = ANTHROPIC_API_KEY;
+  } else if (route === "workerGlm") {
+    targetUrl = joinUpstreamUrl(GLM_WORKER_UPSTREAM_URL, subPath);
+    if (GLM_WORKER_API_KEY) outHeaders["authorization"] = `Bearer ${GLM_WORKER_API_KEY}`;
   }
 
   recordModelRequest(route, requestedModel);
@@ -490,7 +456,7 @@ const server = http.createServer(async (req, res) => {
 if (isDirectRun) {
   server.listen(PORT, "0.0.0.0", () => {
     console.log(
-      `[llm-proxy] Listening on :${PORT} | GLM->${GLM_UPSTREAM_URL} | Vision->${VISION_UPSTREAM_URL} | AnthropicProxy=${ANTHROPIC_API_KEY ? "enabled" : "oauth-mode"} | Allowed=[${[...ALLOWED_ARCHITECT_MODELS].join(", ")}] | Telemetry: GET /stats`
+      `[llm-proxy] Listening on :${PORT} | Hub->${GLM_UPSTREAM_URL} | Vision->${VISION_UPSTREAM_URL} | WorkerGLM->${GLM_WORKER_UPSTREAM_URL} | Allowed=[${[...ALLOWED_ARCHITECT_MODELS].join(", ")}] | Telemetry: GET /stats`
     );
   });
 }

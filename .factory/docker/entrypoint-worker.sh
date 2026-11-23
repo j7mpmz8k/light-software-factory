@@ -17,7 +17,7 @@ if [ -x /workspace/.factory/sync-skills.sh ] && [ -n "${WORKER_NAME:-}" ]; then
   /workspace/.factory/sync-skills.sh "$WORKER_NAME"
 fi
 
-# Configure Qwen (Fix A13: enforce >= 64,000 context floor)
+# Configure Local Qwen GPU worker (enforce >= 64,000 context floor)
 if [ "${WORKER_NAME:-}" = "worker-qwen" ]; then
   QWEN_URL="${QWEN_INFERENCE_URL:-http://host.docker.internal:11434/v1}"
   QWEN_MOD="${QWEN_MODEL:-qwen3.8:27b}"
@@ -41,43 +41,28 @@ EOF
   echo "[worker-qwen] Configured Hermes -> ${QWEN_MOD} (64k context) @ ${QWEN_URL}"
 fi
 
-if [ "${WORKER_NAME:-}" = "senior-worker" ]; then
-  SENIOR_URL="${SENIOR_INFERENCE_URL:-http://llm-proxy:4000/senior}"
-  SENIOR_MOD="${SENIOR_MODEL:-gemini-4-neon}"
-  SENIOR_KEY="${SENIOR_API_KEY:-proxy-senior-only}"
+# Configure GLM-5.3 Backup / Overflow worker (isolated proxy route & spend cap)
+if [ "${WORKER_NAME:-}" = "worker-glm" ]; then
+  GLM_URL="${GLM_WORKER_INFERENCE_URL:-http://llm-proxy:4000/worker-glm}"
+  GLM_MOD="${GLM_WORKER_MODEL:-glm-5.3}"
+  GLM_KEY="${GLM_WORKER_API_KEY:-proxy-worker-glm-only}"
 
-  mkdir -p "$HOME/.hermes/profiles/senior"
-  cat <<EOF > "$HOME/.hermes/profiles/senior/config.yaml"
+  mkdir -p "$HOME/.hermes/profiles/glm"
+  cat <<EOF > "$HOME/.hermes/profiles/glm/config.yaml"
 model:
-  default: "${SENIOR_MOD}"
+  default: "${GLM_MOD}"
   provider: "custom"
-  base_url: "${SENIOR_URL}"
-  api_key: "${SENIOR_KEY}"
+  base_url: "${GLM_URL}"
+  api_key: "${GLM_KEY}"
   context_length: 64000
 EOF
-  cat <<EOF > "$HOME/.hermes/profiles/senior/.env"
-OPENAI_API_KEY=${SENIOR_KEY}
-OPENAI_BASE_URL=${SENIOR_URL}
+  cat <<EOF > "$HOME/.hermes/profiles/glm/.env"
+OPENAI_API_KEY=${GLM_KEY}
+OPENAI_BASE_URL=${GLM_URL}
 EOF
-  cp "$HOME/.hermes/profiles/senior/.env" "$HOME/.hermes/.env"
-  chmod 600 "$HOME/.hermes/.env" "$HOME/.hermes/profiles/senior/.env"
-  echo "[senior-worker] Configured Hermes -> ${SENIOR_MOD} @ ${SENIOR_URL}"
-fi
-
-if [ "${WORKER_NAME:-}" = "specialist-fable" ]; then
-  if [ "${FABLE_AUTH_MODE:-oauth}" = "proxy" ]; then
-    cat <<EOF >> "$HOME/.worker-env.sh"
-export ANTHROPIC_BASE_URL="http://llm-proxy:4000/anthropic"
-export ANTHROPIC_API_KEY="${FABLE_PROXY_TOKEN:-proxy-fable-only}"
-EOF
-    echo "[specialist-fable] Claude Code configured in PROXY mode."
-  else
-    cat <<'EOF' >> "$HOME/.worker-env.sh"
-unset ANTHROPIC_BASE_URL
-unset ANTHROPIC_API_KEY
-EOF
-    echo "[specialist-fable] Claude Code configured in native OAuth mode."
-  fi
+  cp "$HOME/.hermes/profiles/glm/.env" "$HOME/.hermes/.env"
+  chmod 600 "$HOME/.hermes/.env" "$HOME/.hermes/profiles/glm/.env"
+  echo "[worker-glm] Configured Hermes -> ${GLM_MOD} (64k context) @ ${GLM_URL}"
 fi
 
 HOST_KEY="/tmp/ssh_host_ed25519_key"
