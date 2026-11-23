@@ -51,7 +51,7 @@ The entire system runs inside **7 lightweight Docker containers** on your own se
     │ Shielded from raw diffs & DB    │             │ PR Reviews & Squash-Merges      │
     └────────────────────────────────────┘             └────────────────────────────────────┘
                                                                      │ dispatch-worker.sh
-               ┌─────────────────────────────┬───────────────────────┴─────┐
+               ┌─────────────────────────────┬────────────────────────────┴┐
                ▼                           ▼                          ▼
   ┌───────────────────────────┐   ┌────────────────────────────┐   ┌───────────────────────────┐
   │ worker-agy (Ultra 5x)   │   │ worker-qwen ($0 Local)  │   │ worker-glm (API Backup) │
