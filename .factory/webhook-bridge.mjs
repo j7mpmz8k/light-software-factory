@@ -325,16 +325,26 @@ function enqueueOrchestratorPrompt(promptText, opts = {}) {
   enqueuePrompt(promptText, { ...opts, targetPane: ORCHESTRATOR_PANE, shouldClear: true });
 }
 
-function coalesceComment(threadKey, commentData, isPR, num) {
+function resolveHumanFeedbackTarget(isPR, text = "", baseBranch = "") {
+  if (!isPR) return "architect";
+  if (String(baseBranch || "").toLowerCase() === "master") return "architect";
+  if (/(?:^|\s)[/@]architect\b/i.test(String(text || ""))) return "architect";
+  return "orchestrator";
+}
+
+function coalesceComment(threadKey, commentData, isPR, num, baseBranch = "") {
   let entry = pendingComments.get(threadKey);
   if (!entry) {
     entry = {
       isPR,
       num,
+      baseBranch,
       comments: [],
       timer: null,
     };
     pendingComments.set(threadKey, entry);
+  } else if (baseBranch && !entry.baseBranch) {
+    entry.baseBranch = baseBranch;
   }
 
   entry.comments.push(commentData);
@@ -345,16 +355,32 @@ function coalesceComment(threadKey, commentData, isPR, num) {
     const commentsList = entry.comments
       .map((c) => `- @${c.author}: "${c.body}"`)
       .join("\n");
-    const formattedPrompt = [
-      `[GITHUB EVENT: HUMAN FEEDBACK] Comments on ${entry.isPR ? "PR" : "Issue"} #${entry.num}:`,
-      commentsList,
-    ].join("\n");
+    const combinedBody = entry.comments.map((c) => c.body || "").join("\n");
+    const target = resolveHumanFeedbackTarget(entry.isPR, combinedBody, entry.baseBranch);
 
-    enqueueArchitectPrompt(formattedPrompt, {
-      priority: PRIORITY.HUMAN_COMMENT,
-      kind: "human_comment",
-      threadKey,
-    });
+    if (target === "orchestrator") {
+      const formattedPrompt = [
+        `[GITHUB EVENT: HUMAN PR FEEDBACK] Comments on PR #${entry.num}:`,
+        commentsList,
+        `Run 'gh pr view ${entry.num} --comments' and 'gh pr diff ${entry.num}' (plus the linked Sub-Issue spec & DECISIONS.md) to load full thread context.`,
+        `If the human asked an implementation question, answer clearly on PR #${entry.num}. If they requested code changes, dispatch the fix via .factory/dispatch-worker.sh. If they requested an architectural/spec change, escalate to @Architect.`,
+      ].join("\n");
+      enqueueOrchestratorPrompt(formattedPrompt, {
+        priority: PRIORITY.HUMAN_COMMENT,
+        kind: "human_pr_comment",
+        threadKey,
+      });
+    } else {
+      const formattedPrompt = [
+        `[GITHUB EVENT: HUMAN FEEDBACK] Comments on ${entry.isPR ? "PR" : "Issue"} #${entry.num}:`,
+        commentsList,
+      ].join("\n");
+      enqueueArchitectPrompt(formattedPrompt, {
+        priority: PRIORITY.HUMAN_COMMENT,
+        kind: "human_comment",
+        threadKey,
+      });
+    }
   }, COMMENT_COALESCE_MS);
 }
 
@@ -493,18 +519,20 @@ async function handleEvent(event, payload) {
 
     const isPR = Boolean(payload.issue?.pull_request || payload.pull_request);
     const num = (payload.issue || payload.pull_request).number;
+    const baseBranch = payload.pull_request?.base?.ref || "";
     const threadKey = `${isPR ? "pr" : "issue"}:${num}`;
 
     coalesceComment(
       threadKey,
       { author: comment.user?.login || "user", body: comment.body || "" },
       isPR,
-      num
+      num,
+      baseBranch
     );
     return;
   }
 
-  // 4. Human Review submitted (Fix D5)
+  // 4. Human Review submitted (Fix D5 — Feature PR reviews route to Orchestrator unless /architect or master Release PR)
   if (event === "pull_request_review" && payload.action === "submitted") {
     const review = payload.review;
     if (isAgentOrBotComment(payload.sender)) return;
@@ -512,13 +540,27 @@ async function handleEvent(event, payload) {
     if (!review.body && review.state !== "CHANGES_REQUESTED") return;
 
     const prNum = payload.pull_request.number;
-    enqueueArchitectPrompt(
-      [
-        `[GITHUB EVENT: HUMAN PR REVIEW (${review.state})] @${review.user.login} reviewed PR #${prNum}:`,
-        review.body ? `"${review.body}"` : "(No review body text; status changed)",
-      ].join("\n"),
-      { priority: PRIORITY.HUMAN_COMMENT, kind: "human_review", threadKey: `pr:${prNum}` }
-    );
+    const baseBranch = payload.pull_request?.base?.ref || "";
+    const target = resolveHumanFeedbackTarget(true, review.body || "", baseBranch);
+
+    if (target === "orchestrator") {
+      enqueueOrchestratorPrompt(
+        [
+          `[GITHUB EVENT: HUMAN PR REVIEW (${review.state})] @${review.user.login} reviewed PR #${prNum}:`,
+          review.body ? `"${review.body}"` : "(No review body text; status changed)",
+          `Run 'gh pr view ${prNum} --comments' and 'gh pr diff ${prNum}' to load full context. If CHANGES_REQUESTED or code edits were requested, dispatch the fix via .factory/dispatch-worker.sh.`,
+        ].join("\n"),
+        { priority: PRIORITY.HUMAN_COMMENT, kind: "human_pr_review", threadKey: `pr:${prNum}` }
+      );
+    } else {
+      enqueueArchitectPrompt(
+        [
+          `[GITHUB EVENT: HUMAN PR REVIEW (${review.state})] @${review.user.login} reviewed PR #${prNum}:`,
+          review.body ? `"${review.body}"` : "(No review body text; status changed)",
+        ].join("\n"),
+        { priority: PRIORITY.HUMAN_COMMENT, kind: "human_review", threadKey: `pr:${prNum}` }
+      );
+    }
     return;
   }
 
@@ -794,6 +836,7 @@ export {
   isAuthorizedHuman,
   extractLinkedIssue,
   classifyCiFailure,
+  resolveHumanFeedbackTarget,
   coalesceComment,
   enqueuePrompt,
   drainQueue,

@@ -7,6 +7,7 @@ import {
   isAuthorizedHuman,
   extractLinkedIssue,
   classifyCiFailure,
+  resolveHumanFeedbackTarget,
   coalesceComment,
   queue,
   pendingComments,
@@ -102,5 +103,18 @@ describe("Webhook Bridge Unit Tests", () => {
     assert.equal(classifyCiFailure(4, false, 3), "circuit_breaker");
     // Already escalated once: any subsequent failure trips circuit breaker immediately
     assert.equal(classifyCiFailure(1, true, 3), "circuit_breaker");
+  });
+
+  test("resolveHumanFeedbackTarget routes Issues to architect and feature PRs to orchestrator with /architect override", () => {
+    // Issues always go to Architect
+    assert.equal(resolveHumanFeedbackTarget(false, "Let's design auth", ""), "architect");
+    // Feature PR comments/reviews go to Orchestrator (stateless /clear)
+    assert.equal(resolveHumanFeedbackTarget(true, "Can you rename this helper?", "staging"), "orchestrator");
+    assert.equal(resolveHumanFeedbackTarget(true, "Why did you add this index?", ""), "orchestrator");
+    // Explicit /architect or @architect escape hatch on any PR goes to Architect
+    assert.equal(resolveHumanFeedbackTarget(true, "/architect should we rethink this schema?", "staging"), "architect");
+    assert.equal(resolveHumanFeedbackTarget(true, "Hey @architect thoughts on this tradeoff?", "staging"), "architect");
+    // Rolling Release PR targeting master goes to Architect
+    assert.equal(resolveHumanFeedbackTarget(true, "Looks ready to ship", "master"), "architect");
   });
 });

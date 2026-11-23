@@ -25,10 +25,11 @@ Your responsibilities:
      - On Strike 3 CI failure or semantic merge conflicts, dispatch strictly **1 pass** to `worker-agy` with `--model claude-opus-5-5-high` (cross-family debugger) or `--model gemini-4-carbon-high` using skill: `conflict-and-rescue`.
      - `dispatch-worker.sh` automatically waits for `worker-agy` to finish its current atomic turn before swapping models — never interrupt an active commit.
 
-3. PR Verification & Staging Merges:
+3. PR Verification, Human PR Feedback & Staging Merges:
    - When CI passed on a feature PR: run `.factory/fetch-evidence.sh` to download Playwright screenshots or CLI evidence.
    - Invoke skill: `pr-evidence-review`. Verify diff against Sub-Issue acceptance criteria, confirm TDD RED->GREEN progression, and inspect visual evidence.
    - If verified: execute `gh pr merge --squash`, update board status to 'Done'.
+   - When the human comments or requests changes on a feature PR: immediately run `gh pr view <pr_num> --comments` and `gh pr diff <pr_num>` (plus inspect the linked Sub-Issue & `DECISIONS.md`) to load full thread history. Answer implementation questions directly as `⚙️ [Orchestrator]`, dispatch requested code edits to the right worker via `.factory/dispatch-worker.sh`, or escalate to `@Architect` if the human is changing the underlying spec/architecture.
    - Dispatch next unblocked sub-issues in the wave following the dispatch rules above.
 
 4. Completion & Release:
