@@ -27,46 +27,47 @@ The entire system runs inside **7 lightweight Docker containers** on your own se
 ## 2. System Architecture & Zero-Trust Isolation (7 Containers — A1 + B2)
 
 ```text
-                                🌐 GitHub (Issues, PRs, Webhooks)
-                                              │
-                      ┌───────────────────────┴───────────────────────┐
-                      ▼                                               ▼
-         ┌─────────────────────────┐                     ┌─────────────────────────┐
-         │ 🚦 webhook-bridge (Hub) │                     │ 🛡️ human-gate-guard     │
-         │   Priority Wait-Queue   │                     │   Runs on trusted master│
-         │   8s Comment Coalescer  │                     └─────────────────────────┘
-         │   3-Strike Circuit Brkr │
-         └───────┬─────────────────┘
-                 │
-      ┌──────────┴──────────────────────────────────────┐
-      │ Human Comments & Planning                       │ CI, 'ready' & Escalation Events
-      ▼                                                 ▼
-┌───────────────────────────┐             ┌───────────────────────────┐
-│ 🧠 architect (herdr-hub)  │             │ ⚙️ orchestrator (herdr-hub)│
-│   GLM-5.3 + Vision        │             │   GLM-5.3 + Vision        │
-│   Persistent Context      │             │   Ephemeral (/clear)      │
-│   Discussions, Specs,     │             │   to-tickets, Model Router│
-│   GLOSSARY.md & /handoff  │             │   Reviews & Squash-Merges │
-└───────────────────────────┘             └─────────────┬─────────────┘
-                                                        │ Dispatches Sub-Issues via
-                                                        │ dispatch-worker.sh [--model]
-                 ┌──────────────────────────────────────┼──────────────────────────┐
-                 ▼                                      ▼                          ▼
-         ┌───────────────────────┐              ┌───────────────┐          ┌───────────────────┐
-         │ ⚡ worker-agy          │              │ 💻 worker-qwen│          │ 🛡️ worker-glm     │
-         │ Antigravity Ultra 5x  │              │ Local GPU     │          │ GLM-5.3 via Proxy │
-         │ Dynamic --model swap: │              │ Qwen 3.8 27B  │          │ Cheap API Backup  │
-         │ • Carbon (Wave 0 E2E) │              │ 100% Free     │          │ & 3rd Parallel    │
-         │ • Hydrogen / Neon     │              │               │          │ Builder           │
-         │ • Opus 5.5 (Rescues)  │              │               │          │                   │
-         └───────┬───────────────┘              └───────┬───────┘          └─────────┬─────────┘
-                 │                                      │                            │
-                 ▼                                      ▼                            ▼
- ┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
- │ 🗄️ factory-postgres (db-net)                                                                    │
- │   3 Isolated Databases: app_agy | app_qwen | app_glm                                            │
- │   Clean schema reset on every branch prep via .factory/prep-branch.sh                           │
- └─────────────────────────────────────────────────────────────────────────────────────────────────┘
+                          ┌─────────────────────────────────────┐
+                          │   GitHub (Issues, PRs, Webhooks)    │
+                          └─────────────────────────────────────┘
+                                             │
+                     ┌───────────────────────┴───────────────────────┐
+                     ▼                                               ▼
+    ┌─────────────────────────────────┐             ┌─────────────────────────────────┐
+    │ webhook-bridge (herdr-hub)      │             │ human-gate-guard (GitHub CI)    │
+    │ Priority Queue & 8s Coalescer   │             │ Runs from trusted master branch │
+    │ 3-Strike Rescue Circuit Breaker │             │ Locks migrations, auth, config  │
+    │ 15m Worker Stall Watchdog       │             │ Surfaces PRs: Awaiting Approval │
+    └─────────────────────────────────┘             └─────────────────────────────────┘
+                     │
+                     ├───────────────────────────────────────────────┐
+                     │ Issues & /architect                           │ PRs, CI & 'ready'
+                     ▼                                               ▼
+    ┌─────────────────────────────────┐             ┌─────────────────────────────────┐
+    │ architect (herdr-hub)           │             │ orchestrator (herdr-hub)        │
+    │ GLM-5.3 + GLM-5.3-Flash Vision  │             │ GLM-5.3 + GLM-5.3-Flash Vision  │
+    │ Persistent Context (/handoff)   │             │ Ephemeral Context (/clear)      │
+    │ Specs, Discussions, GLOSSARY.md │             │ to-tickets & --model Router     │
+    │ Shielded from raw diffs & DB    │             │ PR Reviews & Squash-Merges      │
+    └─────────────────────────────────┘             └─────────────────────────────────┘
+                                                                     │ dispatch-worker.sh
+               ┌─────────────────────────────┬───────────────────────┴─────┐
+               ▼                             ▼                             ▼
+  ┌─────────────────────────┐   ┌─────────────────────────┐   ┌─────────────────────────┐
+  │ worker-agy (Ultra 5x)   │   │ worker-qwen ($0 Local)  │   │ worker-glm (API Backup) │
+  │ agy CLI (--model swap)  │   │ Hermes -> Local GPU     │   │ Hermes -> llm-proxy     │
+  │ - Carbon   (Wave 0 E2E) │   │ Qwen 3.8 27B            │   │ GLM-5.3 (/worker-glm)   │
+  │ - Hydrogen (Routine)    │   │ - UI & Styling          │   │ - Ultra 5x Backup       │
+  │ - Neon     (Complex)    │   │ - Unit Tests            │   │ - 3rd Parallel Lane     │
+  │ - Opus 5.5 (Rescues)    │   │ - Parallel Overflow     │   │ - Isolated Hourly Cap   │
+  └─────────────────────────┘   └─────────────────────────┘   └─────────────────────────┘
+               │                             │                             │
+               ▼                             ▼                             ▼
+  ┌─────────────────────────────────────────────────────────────────────────────────────┐
+  │ factory-postgres (internal db-net — zero access from herdr-hub)                     │
+  │ 3 Isolated Databases:  app_agy  |  app_qwen  |  app_glm  (30s timeout)              │
+  │ Clean public schema reset before every branch via .factory/prep-branch.sh           │
+  └─────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Why It Is "Zero-Trust"
@@ -84,7 +85,7 @@ The entire system runs inside **7 lightweight Docker containers** on your own se
 | :--- | :--- | :--- | :--- |
 | **🧠 Chief Architect** | `herdr-hub`<br>*(Hermes CLI)* | **GLM-5.3** +<br>GLM-5.3-Flash Vision | **The Thinker & Technical Lead:** Your sole conversational partner on GitHub. Holds persistent memory across features, drafts Strawman specs (`grill-with-docs`), enforces `GLOSSARY.md`, and performs warm resets via `/handoff`. Uses cheap GLM-5.3 credits so marathon chats never drain Ultra 5x quota. |
 | **⚙️ Factory Orchestrator** | `herdr-hub`<br>*(Hermes CLI)* | **GLM-5.3** +<br>GLM-5.3-Flash Vision | **The Doer & Assembly Foreman:** Runs in clean ephemeral turns (`/clear` before every turn) on always-on GLM-5.3 so failover never stalls when Antigravity throttles. Slices specs into waves (`to-tickets`), picks the exact `--model` per ticket, inspects PR diffs & Playwright screenshots (`pr-evidence-review`), and squash-merges to `staging`. |
-| **🚦 Webhook Bridge** | `herdr-hub`<br>*(Node daemon)* | — | **Traffic Controller & Spend Guard:** Routes human comments to Architect, routes execution/CI events to Orchestrator, bundles comments within 8s, tracks per-PR CI strikes (3-strike rescue $\to$ spend circuit breaker), and monitors worker stalls (>45 min). |
+| **🚦 Webhook Bridge** | `herdr-hub`<br>*(Node daemon)* | — | **Traffic Controller & Spend Guard:** Routes Issue comments & `/architect` to Architect, routes Feature PR comments/reviews & CI events to Orchestrator, bundles comments within 8s, tracks per-PR CI strikes (3-strike rescue → spend circuit breaker), and monitors worker stalls (>45 min). |
 | **⚡ Primary Multi-Model Builder & Senior/Specialist** | `worker-agy`<br>*(Antigravity CLI)* | **AI Ultra 5x** *(dynamic `--model`)*:<br>• `gemini-4-carbon-high` *(Wave 0 E2E)*<br>• `gemini-4-hydrogen-high` *(Routine)*<br>• `gemini-4-neon-high` *(Complex)*<br>• `claude-opus-5-5-high` *(Rescues)* | **Main Driver #1 + Combined Senior/Specialist:** Single isolated sandbox (`app_agy`) dynamically switched per task by `dispatch-worker.sh --model`. Authors Wave 0 black-box E2E tests, builds core features, and executes 1-pass cross-family rescues & merge conflict fixes. |
 | **💻 Parallel Local Builder** | `worker-qwen`<br>*(Hermes CLI)* | **Local Qwen 3.8 27B**<br>*(Local GPU Host)* | **Main Driver #2 ($0 Cost):** Parallel clean-on-dispatch builder (`app_qwen`) for UI styling, components, unit tests, and boilerplate. |
 | **🛡️ Cheap API Backup & Overflow Builder** | `worker-glm`<br>*(Hermes CLI)* | **GLM-5.3**<br>*(via `llm-proxy`)* | **Quota Backup & 3rd Parallel Slot:** Isolated builder (`app_glm`, separate hourly cap) that takes over routine tasks whenever Ultra 5x throttles (avoiding expensive Gemini credit spillover) or adds a 3rd parallel lane on large waves. |
@@ -114,22 +115,20 @@ The factory integrates a curated suite of operational and architectural skills:
 You drive the entire factory through **GitHub Issues and Pull Requests**:
 
 ```text
-    [Your 3 Touchpoints]
-
-    1. CREATE / PLAN            2. REVIEW SENSITIVE CHANGES         3. SHIP TO PRODUCTION
-   ┌───────────────────┐       ┌───────────────────────────┐       ┌──────────────────────┐
-   │ Feature Request   │       │ Kanban Column:            │       │ Rolling Release PR   │
-   │ Label: "plan"     │ ────► │ "Awaiting Approval"       │ ────► │ staging -> master    │
-   │ Review blueprint  │       │ Purple badge: human-gate  │       │ Approve -> Merge     │
-   │ Swap to "ready"   │       │ Click Approve & Merge     │       │ ("Create merge")     │
-   └───────────────────┘       └───────────────────────────┘       └──────────────────────┘
+  1. CREATE / PLAN                 2. REVIEW SENSITIVE PRs            3. SHIP TO PRODUCTION
+┌─────────────────────────┐      ┌───────────────────────────┐      ┌───────────────────────────┐
+│ Feature Request         │      │ Kanban Column:            │      │ Rolling Release PR        │
+│ Label: "plan"           │ ───► │ "Awaiting Approval"       │ ───► │ staging -> master         │
+│ Review blueprint        │      │ Badge: human-gate         │      │ Approve -> Merge          │
+│ Swap to "ready"         │      │ Click Approve & Merge     │      │ ("Create merge commit")   │
+└─────────────────────────┘      └───────────────────────────┘      └───────────────────────────┘
 ```
 
 ### Touchpoint 1: From Rough Idea to Autonomous Execution
 1. **Discuss or Plan:** Open a **Feature Request** on GitHub and apply **`plan`** (or comment `/grill`).
 2. **Strawman with Defaults:** The Architect posts a concrete Strawman spec referencing [`GLOSSARY.md`](GLOSSARY.md). Reply **"LGTM"** to fast-track.
 3. **Handoff via `ready` Label:** Once locked, apply **`ready`**.
-4. **Wave 0 $\to$ Wave N Execution:** The **Orchestrator** wakes up cleanly (`/clear`), slices the spec via `to-tickets`, dispatches **Wave 0 (Golden E2E Acceptance Test)** to `worker-agy --model gemini-4-carbon-high`, then dispatches Wave 1+ implementation across `worker-agy` (`hydrogen`/`neon`), `worker-qwen`, and `worker-glm`.
+4. **Wave 0 → Wave N Execution:** The **Orchestrator** wakes up cleanly (`/clear`), slices the spec via `to-tickets`, dispatches **Wave 0 (Golden E2E Acceptance Test)** to `worker-agy --model gemini-4-carbon-high`, then dispatches Wave 1+ implementation across `worker-agy` (`hydrogen`/`neon`), `worker-qwen`, and `worker-glm`.
 
 ### Touchpoint 2: The Single Column You Check — `Awaiting Approval`
 Routine PRs auto-merge to `staging` once CI and Orchestrator review pass. Any PR touching database migrations, auth/security, `.github/`, `.factory/`, `.agents/`, or `AGENTS.md` is locked by `human-gate-guard` and placed in **`Awaiting Approval`** for your review and squash-merge.
