@@ -28,46 +28,46 @@ The entire system runs inside **7 lightweight Docker containers** on your own se
 
 ```text
                           ┌─────────────────────────────────────┐
-                          │   GitHub (Issues, PRs, Webhooks)    │
+                          │   GitHub (Issues, PRs, Webhooks) │
                           └─────────────────────────────────────┘
-                                             │
-                     ┌───────────────────────┴───────────────────────┐
+                                           │
+                     ┌───────────────────────┴───────────────────────────┐
                      ▼                                               ▼
-    ┌─────────────────────────────────┐             ┌─────────────────────────────────┐
+    ┌────────────────────────────────────┐             ┌────────────────────────────────────┐
     │ webhook-bridge (herdr-hub)      │             │ human-gate-guard (GitHub CI)    │
     │ Priority Queue & 8s Coalescer   │             │ Runs from trusted master branch │
     │ 3-Strike Rescue Circuit Breaker │             │ Locks migrations, auth, config  │
     │ 15m Worker Stall Watchdog       │             │ Surfaces PRs: Awaiting Approval │
-    └─────────────────────────────────┘             └─────────────────────────────────┘
+    └────────────────────────────────────┘             └────────────────────────────────────┘
                      │
-                     ├───────────────────────────────────────────────┐
+                     ├───────────────────────────────────────────────────┐
                      │ Issues & /architect                           │ PRs, CI & 'ready'
                      ▼                                               ▼
-    ┌─────────────────────────────────┐             ┌─────────────────────────────────┐
+    ┌────────────────────────────────────┐             ┌────────────────────────────────────┐
     │ architect (herdr-hub)           │             │ orchestrator (herdr-hub)        │
     │ GLM-5.3 + GLM-5.3-Flash Vision  │             │ GLM-5.3 + GLM-5.3-Flash Vision  │
     │ Persistent Context (/handoff)   │             │ Ephemeral Context (/clear)      │
     │ Specs, Discussions, GLOSSARY.md │             │ to-tickets & --model Router     │
     │ Shielded from raw diffs & DB    │             │ PR Reviews & Squash-Merges      │
-    └─────────────────────────────────┘             └─────────────────────────────────┘
+    └────────────────────────────────────┘             └────────────────────────────────────┘
                                                                      │ dispatch-worker.sh
                ┌─────────────────────────────┬───────────────────────┴─────┐
-               ▼                             ▼                             ▼
-  ┌─────────────────────────┐   ┌─────────────────────────┐   ┌─────────────────────────┐
+               ▼                           ▼                          ▼
+  ┌───────────────────────────┐   ┌────────────────────────────┐   ┌───────────────────────────┐
   │ worker-agy (Ultra 5x)   │   │ worker-qwen ($0 Local)  │   │ worker-glm (API Backup) │
   │ agy CLI (--model swap)  │   │ Hermes -> Local GPU     │   │ Hermes -> llm-proxy     │
   │ - Carbon   (Wave 0 E2E) │   │ Qwen 3.8 27B            │   │ GLM-5.3 (/worker-glm)   │
   │ - Hydrogen (Routine)    │   │ - UI & Styling          │   │ - Ultra 5x Backup       │
   │ - Neon     (Complex)    │   │ - Unit Tests            │   │ - 3rd Parallel Lane     │
   │ - Opus 5.5 (Rescues)    │   │ - Parallel Overflow     │   │ - Isolated Hourly Cap   │
-  └─────────────────────────┘   └─────────────────────────┘   └─────────────────────────┘
+  └───────────────────────────┘   └────────────────────────────┘   └───────────────────────────┘
                │                             │                             │
                ▼                             ▼                             ▼
-  ┌─────────────────────────────────────────────────────────────────────────────────────┐
-  │ factory-postgres (internal db-net — zero access from herdr-hub)                     │
-  │ 3 Isolated Databases:  app_agy  |  app_qwen  |  app_glm  (30s timeout)              │
-  │ Clean public schema reset before every branch via .factory/prep-branch.sh           │
-  └─────────────────────────────────────────────────────────────────────────────────────┘
+  ┌──────────────────────────────────────────────────────────────────────────────────┐
+  │ factory-postgres (internal db-net — zero access from herdr-hub)           │
+  │ 3 Isolated Databases:  app_agy  |  app_qwen  |  app_glm  (30s timeout)    │
+  │ Clean public schema reset before every branch via .factory/prep-branch.sh │
+  └──────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Why It Is "Zero-Trust"
