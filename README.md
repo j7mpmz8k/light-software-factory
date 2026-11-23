@@ -116,12 +116,12 @@ You drive the entire factory through **GitHub Issues and Pull Requests**:
 
 ```text
   1. CREATE / PLAN                 2. REVIEW SENSITIVE PRs            3. SHIP TO PRODUCTION
-┌─────────────────────────┐      ┌───────────────────────────┐      ┌───────────────────────────┐
-│ Feature Request         │      │ Kanban Column:            │      │ Rolling Release PR        │
-│ Label: "plan"           │ ───► │ "Awaiting Approval"       │ ───► │ staging -> master         │
-│ Review blueprint        │      │ Badge: human-gate         │      │ Approve -> Merge          │
-│ Swap to "ready"         │      │ Click Approve & Merge     │      │ ("Create merge commit")   │
-└─────────────────────────┘      └───────────────────────────┘      └───────────────────────────┘
+┌─────────────────────────┐      ┌───────────────────────────┐      ┌────────────────────────────┐
+│ Feature Request       │      │ Kanban Column:          │      │ Rolling Release PR      │
+│ Label: "plan"         │ ───► │ "Awaiting Approval"     │ ───► │ staging -> master        │
+│ Review blueprint      │      │ Badge: human-gate       │      │ Approve -> Merge        │
+│ Swap to "ready"       │      │ Click Approve & Merge   │      │ ("Create merge commit") │
+└─────────────────────────┘      └───────────────────────────┘      └────────────────────────────┘
 ```
 
 ### Touchpoint 1: From Rough Idea to Autonomous Execution
