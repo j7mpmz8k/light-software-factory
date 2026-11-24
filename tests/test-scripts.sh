@@ -97,17 +97,37 @@ mkdir -p "${MOCK_HOME}/.hermes/skills"
 HOME="$MOCK_HOME" .factory/sync-skills.sh architect
 HOME="$MOCK_HOME" .factory/sync-skills.sh orchestrator
 HOME="$MOCK_HOME" .factory/sync-skills.sh worker-agy
+HOME="$MOCK_HOME" .factory/sync-skills.sh worker-qwen
 HOME="$MOCK_HOME" .factory/sync-skills.sh worker-glm
 assert_eq "sync-skills.sh links tdd skill for architect" "true" "$([ -L "${MOCK_HOME}/.hermes/profiles/architect/skills/tdd" ] && echo "true" || echo "false")"
 assert_eq "sync-skills.sh links grill-with-docs for architect" "true" "$([ -L "${MOCK_HOME}/.hermes/profiles/architect/skills/grill-with-docs" ] && echo "true" || echo "false")"
 assert_eq "sync-skills.sh links to-tickets for orchestrator" "true" "$([ -L "${MOCK_HOME}/.hermes/profiles/orchestrator/skills/to-tickets" ] && echo "true" || echo "false")"
 assert_eq "sync-skills.sh links conflict-and-rescue for worker-agy" "true" "$([ -L "${MOCK_HOME}/.gemini/antigravity-cli/skills/conflict-and-rescue" ] && echo "true" || echo "false")"
-assert_eq "sync-skills.sh links domain-modeling for worker-glm" "true" "$([ -L "${MOCK_HOME}/.hermes/skills/domain-modeling" ] && echo "true" || echo "false")"
+assert_eq "sync-skills.sh links domain-modeling for worker-qwen profile" "true" "$([ -L "${MOCK_HOME}/.hermes/profiles/qwen/skills/domain-modeling" ] && echo "true" || echo "false")"
+assert_eq "sync-skills.sh links domain-modeling for worker-glm profile" "true" "$([ -L "${MOCK_HOME}/.hermes/profiles/glm/skills/domain-modeling" ] && echo "true" || echo "false")"
 rm -rf "$MOCK_HOME"
 
 # 9. Regression guard: never pass text strings ("/clear", "/exit") or tmux "C-d" to herdr agent send-keys
 BAD_SENDKEYS="$(grep -rnE 'send-keys.*("/clear"|"/exit"|"C-d")' .factory/ || true)"
 assert_eq "no invalid text or tmux keys passed to herdr send-keys" "" "$BAD_SENDKEYS"
+
+# 10. Regression guard: board-sync.sh handles unquoted '&' in CI_WORKFLOW_NAME without crashing and avoids '--jq --arg'
+MOCK_BRIDGE_CFG="/tmp/factory-mock-bridge-$$.conf"
+printf 'CI_WORKFLOW_NAME=CI & PR Evidence\nPROJECT_NUMBER=\n' > "$MOCK_BRIDGE_CFG"
+BRIDGE_OUT="$(FACTORY_ROLE=architect BRIDGE_ENV_FILE="$MOCK_BRIDGE_CFG" .factory/board-sync.sh 1 Status "In Progress" 2>&1)"
+assert_eq "board-sync.sh safely parses unquoted '&' in config without command execution" "" "$BRIDGE_OUT"
+rm -f "$MOCK_BRIDGE_CFG"
+
+BAD_JQ_ARG="$(grep -rn -- '--jq --arg' .factory/ || true)"
+assert_eq "no invalid 'gh ... --jq --arg' flag sequence in .factory/" "" "$BAD_JQ_ARG"
+
+# 11. Regression guard: unattended CLI flags (--yolo on hub Hermes, --dangerously-skip-permissions on worker-agy, no ps-aux token URL)
+assert_contains "launch-panes.sh passes --yolo to architect" "--profile architect --yolo" "$(cat .factory/launch-panes.sh)"
+assert_contains "launch-panes.sh passes --yolo to orchestrator" "--profile orchestrator --yolo" "$(cat .factory/launch-panes.sh)"
+assert_contains "launch-panes.sh uses --dangerously-skip-permissions on worker-agy" "--dangerously-skip-permissions" "$(cat .factory/launch-panes.sh)"
+assert_contains "dispatch-worker.sh uses --dangerously-skip-permissions on worker-agy" "--dangerously-skip-permissions" "$(cat .factory/dispatch-worker.sh)"
+BAD_TOKEN_URL="$(grep -n 'x-access-token:\${TOKEN}@' .factory/docker/bootstrap-workspace.sh || true)"
+assert_eq "bootstrap-workspace.sh hides token from git clone CLI args" "" "$BAD_TOKEN_URL"
 
 echo "=== Scripts Integration Results: ${PASSED} passed, ${FAILED} failed ==="
 if [ "$FAILED" -gt 0 ]; then

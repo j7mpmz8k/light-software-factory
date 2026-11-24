@@ -19,6 +19,7 @@ if [ -n "$ROLE" ]; then
     exit 1
   fi
   export GH_TOKEN="$(cat "$TOKEN_FILE")"
+  [ -n "${FACTORY_REPO:-}" ] && export GH_REPO="${GH_REPO:-$FACTORY_REPO}"
   export GH_CONFIG_DIR="/tmp/factory-gh-config-${ROLE}"
   mkdir -p "$GH_CONFIG_DIR"
 fi

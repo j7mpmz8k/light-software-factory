@@ -9,6 +9,8 @@
 set -euo pipefail
 
 TARGET="${1:-}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 CONFIG_DIR="${HOME}/.config/light-factory"
 COMPOSE_ENV="${CONFIG_DIR}/compose.env"
 
@@ -17,14 +19,33 @@ if [ ! -f "$COMPOSE_ENV" ]; then
   exit 1
 fi
 
+cd "$REPO_DIR"
+
+# Auto-detect rootless Podman socket & keep-id user namespace mapping if DOCKER_HOST is not explicitly set
+USER_ID="$(id -u)"
+if [ -z "${DOCKER_HOST:-}" ] && [ -S "/run/user/${USER_ID}/podman/podman.sock" ]; then
+  export DOCKER_HOST="unix:///run/user/${USER_ID}/podman/podman.sock"
+  export FACTORY_USERNS_MODE="${FACTORY_USERNS_MODE:-keep-id}"
+fi
+
 set_env_var() {
   local key="$1"
   local val="$2"
-  if grep -q "^${key}=" "$COMPOSE_ENV"; then
-    sed -i "s|^${key}=.*|${key}=${val}|" "$COMPOSE_ENV"
-  else
-    echo "${key}=${val}" >> "$COMPOSE_ENV"
-  fi
+  local tmp_file="${COMPOSE_ENV}.tmp.$$"
+  awk -v k="$key" -v v="$val" '
+    BEGIN { updated = 0 }
+    index($0, k "=") == 1 {
+      print k "=" v
+      updated = 1
+      next
+    }
+    { print }
+    END {
+      if (!updated) print k "=" v
+    }
+  ' "$COMPOSE_ENV" > "$tmp_file"
+  chmod 600 "$tmp_file" 2>/dev/null || true
+  mv "$tmp_file" "$COMPOSE_ENV"
 }
 
 case "$TARGET" in

@@ -7,8 +7,8 @@ create_isolated_db() {
   local role_pass="$3"
 
   echo "[factory-postgres] Provisioning isolated DB '${db_name}' for role '${role_name}'..."
-  psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
-    CREATE ROLE ${role_name} WITH LOGIN PASSWORD '${role_pass}' NOSUPERUSER NOCREATEDB NOCREATEROLE;
+  psql -v ON_ERROR_STOP=1 -v role_pass="$role_pass" --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
+    CREATE ROLE ${role_name} WITH LOGIN PASSWORD :'role_pass' NOSUPERUSER NOCREATEDB NOCREATEROLE;
     ALTER ROLE ${role_name} SET statement_timeout = '30s';
     ALTER ROLE ${role_name} SET search_path TO public, extensions;
     CREATE DATABASE ${db_name} OWNER ${role_name};

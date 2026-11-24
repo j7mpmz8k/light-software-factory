@@ -69,9 +69,15 @@ describe("Token Refresher Unit Tests", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  test("scheduleNextRefresh is defined and schedules a clearable refresh timer", () => {
-    const timer = scheduleNextRefresh(60_000);
-    assert.ok(timer);
-    clearTimeout(timer);
+  test("scheduleNextRefresh unrefs timer in test mode and keeps event loop ref'd in daemon mode", () => {
+    const unrefTimer = scheduleNextRefresh(60_000, false);
+    assert.ok(unrefTimer);
+    assert.equal(unrefTimer.hasRef(), false);
+    clearTimeout(unrefTimer);
+
+    const daemonTimer = scheduleNextRefresh(60_000, true);
+    assert.ok(daemonTimer);
+    assert.equal(daemonTimer.hasRef(), true);
+    clearTimeout(daemonTimer);
   });
 });

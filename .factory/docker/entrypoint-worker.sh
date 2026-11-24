@@ -17,6 +17,44 @@ if [ -x /workspace/.factory/sync-skills.sh ] && [ -n "${WORKER_NAME:-}" ]; then
   /workspace/.factory/sync-skills.sh "$WORKER_NAME"
 fi
 
+write_worker_soul() {
+  local soul_path="$1"
+  cat <<'SOULEOF' > "$soul_path"
+You are an isolated Execution Builder in the Light Software Factory.
+Your workspace is /workspace and your dedicated PostgreSQL database is $DATABASE_URL.
+Mandatory rules before and during every Sub-Issue:
+1. Read AGENTS.md and GLOSSARY.md before writing code or database schemas.
+2. Run `.factory/prep-branch.sh <issue_num_or_branch> [slug]` to reset your branch, public DB schema, dependencies, and skills cleanly.
+3. Follow strict Red -> Green -> Refactor TDD (skill: tdd) and Deep Modules (skill: domain-modeling). Never weaken or delete tests.
+4. Open one atomic PR targeting `staging` (never `main` or `master`) referencing `Closes #<sub_issue_num>` with test output and evidence.
+SOULEOF
+}
+
+# Pre-seed Antigravity CLI workspace trust & credit guard for unattended execution in worker-agy
+if [ "${WORKER_NAME:-}" = "worker-agy" ]; then
+  AGY_SETTINGS_DIR="$HOME/.gemini/antigravity-cli"
+  AGY_SETTINGS_FILE="${AGY_SETTINGS_DIR}/settings.json"
+  mkdir -p "$AGY_SETTINGS_DIR"
+  if [ -s "$AGY_SETTINGS_FILE" ] && jq empty "$AGY_SETTINGS_FILE" >/dev/null 2>&1; then
+    TMP_SETTINGS="${AGY_SETTINGS_FILE}.tmp.$$"
+    jq '
+      .trustedWorkspaces = (((.trustedWorkspaces // []) + ["/workspace"]) | unique)
+      | .useG1Credits = (.useG1Credits // false)
+    ' "$AGY_SETTINGS_FILE" > "$TMP_SETTINGS" && mv "$TMP_SETTINGS" "$AGY_SETTINGS_FILE"
+  else
+    cat <<'EOF' > "$AGY_SETTINGS_FILE"
+{
+  "trustedWorkspaces": [
+    "/workspace"
+  ],
+  "useG1Credits": false
+}
+EOF
+  fi
+  chmod 600 "$AGY_SETTINGS_FILE"
+  echo "[worker-agy] Verified /workspace trust and credit guard in ${AGY_SETTINGS_FILE}"
+fi
+
 # Configure Local Qwen GPU worker (enforce >= 64,000 context floor)
 if [ "${WORKER_NAME:-}" = "worker-qwen" ]; then
   QWEN_URL="${QWEN_INFERENCE_URL:-http://host.docker.internal:11434/v1}"
@@ -24,6 +62,7 @@ if [ "${WORKER_NAME:-}" = "worker-qwen" ]; then
   QWEN_KEY="${QWEN_API_KEY:-local-not-needed}"
 
   mkdir -p "$HOME/.hermes/profiles/qwen"
+  write_worker_soul "$HOME/.hermes/profiles/qwen/SOUL.md"
   cat <<EOF > "$HOME/.hermes/profiles/qwen/config.yaml"
 model:
   default: "${QWEN_MOD}"
@@ -48,6 +87,7 @@ if [ "${WORKER_NAME:-}" = "worker-glm" ]; then
   GLM_KEY="${GLM_WORKER_API_KEY:-proxy-worker-glm-only}"
 
   mkdir -p "$HOME/.hermes/profiles/glm"
+  write_worker_soul "$HOME/.hermes/profiles/glm/SOUL.md"
   cat <<EOF > "$HOME/.hermes/profiles/glm/config.yaml"
 model:
   default: "${GLM_MOD}"

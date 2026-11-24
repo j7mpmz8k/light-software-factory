@@ -168,18 +168,22 @@ async function refreshAll() {
 
 let refreshTimer = null;
 
-function scheduleNextRefresh(delayMs = REFRESH_MS) {
+function scheduleNextRefresh(delayMs = REFRESH_MS, keepAlive = isDirectRun) {
   if (refreshTimer) clearTimeout(refreshTimer);
   refreshTimer = setTimeout(async () => {
     try {
       await refreshAll();
-      scheduleNextRefresh(REFRESH_MS);
+      scheduleNextRefresh(REFRESH_MS, keepAlive);
     } catch (err) {
       console.error("[auth-minter] Scheduled token refresh failed; retrying in 60s:", err.message);
-      scheduleNextRefresh(60_000);
+      scheduleNextRefresh(60_000, keepAlive);
     }
   }, delayMs);
-  if (typeof refreshTimer.unref === "function") refreshTimer.unref();
+  if (keepAlive) {
+    if (typeof refreshTimer.ref === "function") refreshTimer.ref();
+  } else if (typeof refreshTimer.unref === "function") {
+    refreshTimer.unref();
+  }
   return refreshTimer;
 }
 
@@ -203,8 +207,7 @@ if (isDirectRun) {
 
   if (RUN_ONCE) process.exit(0);
 
-  const activeTimer = scheduleNextRefresh(REFRESH_MS);
-  if (typeof activeTimer.ref === "function") activeTimer.ref();
+  scheduleNextRefresh(REFRESH_MS, true);
 }
 
 export {

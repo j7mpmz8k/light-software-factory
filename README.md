@@ -35,7 +35,7 @@ The entire system runs inside **7 lightweight Docker containers** on your own se
                      ▼                                               ▼
     ┌────────────────────────────────────┐             ┌────────────────────────────────────┐
     │ webhook-bridge (herdr-hub)      │             │ human-gate-guard (GitHub CI)    │
-    │ Priority Queue & 8s Coalescer   │             │ Runs from trusted master branch │
+    │ Priority Queue & 8s Coalescer   │             │ Runs from trusted main branch   │
     │ 3-Strike Rescue Circuit Breaker │             │ Locks migrations, auth, config  │
     │ 15m Worker Stall Watchdog       │             │ Surfaces PRs: Awaiting Approval │
     └────────────────────────────────────┘             └────────────────────────────────────┘
@@ -118,7 +118,7 @@ You drive the entire factory through **GitHub Issues and Pull Requests**:
   1. CREATE / PLAN                 2. REVIEW SENSITIVE PRs            3. SHIP TO PRODUCTION
 ┌─────────────────────────┐      ┌───────────────────────────┐      ┌────────────────────────────┐
 │ Feature Request       │      │ Kanban Column:          │      │ Rolling Release PR      │
-│ Label: "plan"         │ ───► │ "Awaiting Approval"     │ ───► │ staging -> master        │
+│ Label: "plan"         │ ───► │ "Awaiting Approval"     │ ───► │ staging -> main         │
 │ Review blueprint      │      │ Badge: human-gate       │      │ Approve -> Merge        │
 │ Swap to "ready"       │      │ Click Approve & Merge   │      │ ("Create merge commit") │
 └─────────────────────────┘      └───────────────────────────┘      └────────────────────────────┘
@@ -133,7 +133,7 @@ You drive the entire factory through **GitHub Issues and Pull Requests**:
 ### Touchpoint 2: The Single Column You Check — `Awaiting Approval`
 Routine PRs auto-merge to `staging` once CI and Orchestrator review pass. Any PR touching database migrations, auth/security, `.github/`, `.factory/`, `.agents/`, or `AGENTS.md` is locked by `human-gate-guard` and placed in **`Awaiting Approval`** for your review and squash-merge.
 
-### Touchpoint 3: Shipping to Production (`staging -> master`)
+### Touchpoint 3: Shipping to Production (`staging -> main`)
 When an Epic finishes on `staging`, `.factory/release-pr.sh` opens/updates the rolling Release PR in **`Awaiting Approval`**. Approve and merge with **"Create a merge commit"** (*never Squash!*). Merging triggers the Architect's `retro` skill.
 
 ---
@@ -141,7 +141,7 @@ When an Epic finishes on `staging`, `.factory/release-pr.sh` opens/updates the r
 ## 5. Built-In Guardrails & Spend Controls
 
 * **Two Separate Bot Identities:** Builders authenticate as `factory-worker[bot]`; the Hub authenticates as `factory-architect[bot]`. Builders can never self-approve or merge their own PRs.
-* **Tamper-Proof `human-gate-guard`:** Executes from trusted `master` via `pull_request_target` so worker branches cannot weaken CI or security checks.
+* **Tamper-Proof `human-gate-guard`:** Executes from your trusted default branch (`main`/`master`) via `pull_request_target` so worker branches cannot weaken CI or security checks.
 * **3-Strike Rescue & Spend Circuit Breaker:** `webhook-bridge.mjs` tracks consecutive CI failures per PR. On Strike 3, it escalates strictly **1 pass** to `worker-agy --model claude-opus-5-5-high`. If CI fails again after rescue, automated retries **halt immediately** (`blocked` label + board `Blocked`) so runaway loops never drain your quota or credits overnight.
 * **Isolated `llm-proxy` Telemetry & Hourly Caps:**
   ```bash

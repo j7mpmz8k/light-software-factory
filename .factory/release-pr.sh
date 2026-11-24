@@ -7,9 +7,35 @@ if [ "${FACTORY_ROLE:-}" = "worker" ]; then
   exit 1
 fi
 
+load_kv_file() {
+  local file="$1"
+  [ -r "$file" ] || return 0
+  local line key val
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    [ -z "$line" ] || [[ "$line" == \#* ]] && continue
+    [[ "$line" == *=* ]] || continue
+    key="${line%%=*}"
+    val="${line#*=}"
+    key="${key%"${key##*[![:space:]]}"}"
+    val="${val#"${val%%[![:space:]]*}"}"
+    if [[ "$val" =~ ^\"(.*)\"$ ]] || [[ "$val" =~ ^\'(.*)\'$ ]]; then
+      val="${BASH_REMATCH[1]}"
+    else
+      val="${val%%[[:space:]]#*}"
+      val="${val%"${val##*[![:space:]]}"}"
+    fi
+    if [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] && [ -z "${!key:-}" ]; then
+      printf -v "$key" '%s' "$val"
+      export "${key?}"
+    fi
+  done < "$file"
+}
+
 ENV_FILE="${BRIDGE_ENV_FILE:-/run/factory-config/bridge.env}"
 [ ! -r "$ENV_FILE" ] && ENV_FILE=".factory/.env"
-[ -r "$ENV_FILE" ] && { set -a; source "$ENV_FILE"; set +a; }
+load_kv_file "$ENV_FILE"
 
 EPIC_NUM="${1:-}"
 REPO="${FACTORY_REPO:-$(gh repo view --json nameWithOwner -q .nameWithOwner)}"

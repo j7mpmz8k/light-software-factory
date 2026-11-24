@@ -140,7 +140,12 @@ if [ "$WORKER_NAME" = "worker-agy" ]; then
       exit 1
     fi
 
-    herdr pane run "$PANE_ID" "HERDR_AGENT=agy ssh -t worker-agy \"bash -lic 'agy --model ${TARGET_MODEL} --mode=accept-edits'\"" >/dev/null
+    for _ in $(seq 1 15); do
+      ssh -o BatchMode=yes -o ConnectTimeout=2 worker-agy true >/dev/null 2>&1 && break
+      sleep 1
+    done
+
+    herdr pane run "$PANE_ID" "HERDR_AGENT=agy ssh -t worker-agy \"bash -lic 'agy --model ${TARGET_MODEL} --dangerously-skip-permissions'\"" >/dev/null
 
     REGISTERED=0
     for _ in $(seq 1 25); do

@@ -26,13 +26,14 @@ services:
         FACTORY_UID: "${FACTORY_UID:-1000}"
         FACTORY_GID: "${FACTORY_GID:-1000}"
     container_name: herdr-auth-minter
+    userns_mode: "${FACTORY_USERNS_MODE:-}"
     <<: *security-hardening
     networks:
       - factory-net
     volumes:
-      - ./.factory/token-refresher.mjs:/opt/factory/token-refresher.mjs:ro
-      - ${HOME}/.config/light-factory/apps.env:/run/factory-config/apps.env:ro
-      - ${HOME}/.config/light-factory/keys:/run/factory-keys:ro
+      - ./.factory/token-refresher.mjs:/opt/factory/token-refresher.mjs:ro,z
+      - ${HOME}/.config/light-factory/apps.env:/run/factory-config/apps.env:ro,z
+      - ${HOME}/.config/light-factory/keys:/run/factory-keys:ro,z
       - auth-architect:/run/factory-auth/architect
       - auth-worker:/run/factory-auth/worker
     environment:
@@ -48,6 +49,7 @@ services:
   llm-proxy:
     image: node:22-bookworm-slim
     container_name: herdr-llm-proxy
+    userns_mode: "${FACTORY_USERNS_MODE:-}"
     <<: *security-hardening
     networks:
       - llm-net
@@ -69,8 +71,8 @@ services:
       ARCHITECT_PROXY_TOKEN: ${ARCHITECT_PROXY_TOKEN:-proxy-architect-only}
       GLM_WORKER_PROXY_TOKEN: ${GLM_WORKER_PROXY_TOKEN:-proxy-worker-glm-only}
     volumes:
-      - ./.factory/llm-proxy.mjs:/opt/factory/llm-proxy.mjs:ro
-      - ${HOME}/.config/light-factory/llm-secrets.env:/run/factory-config/llm-secrets.env:ro
+      - ./.factory/llm-proxy.mjs:/opt/factory/llm-proxy.mjs:ro,z
+      - ${HOME}/.config/light-factory/llm-secrets.env:/run/factory-config/llm-secrets.env:ro,z
     healthcheck:
       test: ["CMD-SHELL", "node -e 'fetch(\"http://127.0.0.1:4000/health\").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))'"]
       interval: 5s
@@ -102,7 +104,7 @@ services:
       POSTGRES_QWEN_PASSWORD: ${POSTGRES_QWEN_PASSWORD}
       POSTGRES_GLM_PASSWORD: ${POSTGRES_GLM_PASSWORD}
     volumes:
-      - ./.factory/postgres/init-dbs.sh:/docker-entrypoint-initdb.d/01-init-dbs.sh:ro
+      - ./.factory/postgres/init-dbs.sh:/docker-entrypoint-initdb.d/01-init-dbs.sh:ro,z
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
@@ -121,6 +123,7 @@ services:
         FACTORY_UID: "${FACTORY_UID:-1000}"
         FACTORY_GID: "${FACTORY_GID:-1000}"
     container_name: herdr-hub
+    userns_mode: "${FACTORY_USERNS_MODE:-}"
     <<: *security-hardening
     networks:
       - factory-net
@@ -140,8 +143,8 @@ services:
       AGY_DEFAULT_MODEL: ${AGY_DEFAULT_MODEL:-gemini-4-hydrogen-high}
     volumes:
       - auth-architect:/run/factory-auth/architect:ro
-      - ${HOME}/.config/light-factory/bridge.env:/run/factory-config/bridge.env:ro
-      - ${HOME}/.config/light-factory/internal-ssh/id_ed25519:/run/factory-ssh/id_ed25519:ro
+      - ${HOME}/.config/light-factory/bridge.env:/run/factory-config/bridge.env:ro,z
+      - ${HOME}/.config/light-factory/internal-ssh/id_ed25519:/run/factory-ssh/id_ed25519:ro,z
       - hub-workspace:/workspace
       - hub-hermes:/home/factory/.hermes
       - hub-herdr:/home/factory/.config/herdr
@@ -165,6 +168,7 @@ services:
         FACTORY_UID: "${FACTORY_UID:-1000}"
         FACTORY_GID: "${FACTORY_GID:-1000}"
     container_name: herdr-worker-agy
+    userns_mode: "${FACTORY_USERNS_MODE:-}"
     <<: *security-hardening
     networks:
       - factory-net
@@ -177,10 +181,15 @@ services:
       DATABASE_URL: "postgres://worker_agy:${POSTGRES_AGY_PASSWORD}@factory-postgres:5432/app_agy"
     volumes:
       - auth-worker:/run/factory-auth/worker:ro
-      - ${HOME}/.config/light-factory/internal-ssh/authorized_keys:/run/factory-ssh/authorized_keys:ro
+      - ${HOME}/.config/light-factory/internal-ssh/authorized_keys:/run/factory-ssh/authorized_keys:ro,z
       - agy-workspace:/workspace
       - agy-auth:/home/factory/.config
       - agy-dotgemini:/home/factory/.gemini
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/sshd.pid"]
+      interval: 5s
+      timeout: 3s
+      retries: 18
     depends_on:
       auth-minter:
         condition: service_healthy
@@ -198,6 +207,7 @@ services:
         FACTORY_UID: "${FACTORY_UID:-1000}"
         FACTORY_GID: "${FACTORY_GID:-1000}"
     container_name: herdr-worker-qwen
+    userns_mode: "${FACTORY_USERNS_MODE:-}"
     <<: *security-hardening
     networks:
       - factory-net
@@ -215,9 +225,14 @@ services:
       QWEN_API_KEY: ${QWEN_API_KEY:-local-not-needed}
     volumes:
       - auth-worker:/run/factory-auth/worker:ro
-      - ${HOME}/.config/light-factory/internal-ssh/authorized_keys:/run/factory-ssh/authorized_keys:ro
+      - ${HOME}/.config/light-factory/internal-ssh/authorized_keys:/run/factory-ssh/authorized_keys:ro,z
       - qwen-workspace:/workspace
       - qwen-hermes:/home/factory/.hermes
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/sshd.pid"]
+      interval: 5s
+      timeout: 3s
+      retries: 18
     depends_on:
       auth-minter:
         condition: service_healthy
@@ -235,6 +250,7 @@ services:
         FACTORY_UID: "${FACTORY_UID:-1000}"
         FACTORY_GID: "${FACTORY_GID:-1000}"
     container_name: herdr-worker-glm
+    userns_mode: "${FACTORY_USERNS_MODE:-}"
     <<: *security-hardening
     networks:
       - factory-net
@@ -251,9 +267,14 @@ services:
       GLM_WORKER_API_KEY: ${GLM_WORKER_PROXY_TOKEN:-proxy-worker-glm-only}
     volumes:
       - auth-worker:/run/factory-auth/worker:ro
-      - ${HOME}/.config/light-factory/internal-ssh/authorized_keys:/run/factory-ssh/authorized_keys:ro
+      - ${HOME}/.config/light-factory/internal-ssh/authorized_keys:/run/factory-ssh/authorized_keys:ro,z
       - glm-workspace:/workspace
       - glm-hermes:/home/factory/.hermes
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/sshd.pid"]
+      interval: 5s
+      timeout: 3s
+      retries: 18
     depends_on:
       auth-minter:
         condition: service_healthy

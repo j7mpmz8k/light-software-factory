@@ -41,12 +41,12 @@ This creates:
 The factory uses two private GitHub Apps so agent actions are role-isolated and audited under bot identities:
 
 1. **Architect App (`factory-architect`):**
-   - Repository permissions: `Issues: Read & Write`, `Pull Requests: Read & Write`, `Contents: Read & Write`.
+   - Repository permissions: `Contents: Read & Write`, `Issues: Read & Write`, `Pull Requests: Read & Write`, `Actions: Read-only`.
    - Generates `.pem` private key -> save as `~/.config/light-factory/keys/architect.pem` (`chmod 600`).
    - Note the **App ID**, **Installation ID**, and **Slug**.
 
 2. **Worker App (`factory-worker`):**
-   - Repository permissions: `Contents: Read & Write` (pushes code to `feature/*` branches), `Pull Requests: Read & Write`.
+   - Repository permissions: `Contents: Read & Write` (pushes code to `feature/*` branches), `Pull Requests: Read & Write`, `Issues: Read-only`, `Actions: Read-only`.
    - Generates `.pem` private key -> save as `~/.config/light-factory/keys/worker.pem` (`chmod 600`).
    - Note the **App ID**, **Installation ID**, and **Slug**.
 
@@ -70,7 +70,7 @@ cp .factory/templates/compose.example ~/.config/light-factory/compose.env
 cp .factory/templates/bridge.example ~/.config/light-factory/bridge.env
 ```
 
-Open each file in an editor and fill in your values. Also update `HUMAN_APPROVERS` in `.github/workflows/human-gate-guard.yml` with your GitHub username.
+Open each file in an editor and fill in your values. Also replace `<YOUR_GITHUB_USERNAME>` in `.github/CODEOWNERS` with your GitHub handle (e.g., `* @octocat`); `.github/workflows/human-gate-guard.yml` automatically defaults `HUMAN_APPROVERS` to the repository owner.
 
 ---
 
@@ -141,7 +141,7 @@ In your GitHub repository settings under **Webhooks**, set:
 - **Payload URL:** `https://your-tunnel-url/webhook`
 - **Content type:** `application/json`
 - **Secret:** The same secret set in `bridge.env`
-- **Events:** Select *Issues*, *Issue comments*, *Pull requests*, *Pull request reviews*, and *Workflow runs*.
+- **Events:** Select *Issues*, *Issue comments*, *Pull requests*, *Pull request reviews*, *Pull request review comments*, and *Workflow runs* (all 6 events).
 
 ---
 
@@ -152,4 +152,4 @@ In your GitHub repository settings under **Webhooks**, set:
 3. Apply the label **`ready`** to hand off to the Orchestrator.
 4. The Orchestrator dispatches **Wave 0** (`worker-agy --model gemini-4-carbon-high`) for the Golden E2E Acceptance Test, then runs Wave 1+ parallel builds across `worker-agy`, `worker-qwen`, and `worker-glm`.
 5. Check your Kanban board's **`Awaiting Approval`** column for any PRs requiring human review (database migrations, auth/security, or factory config).
-6. When an Epic completes, merge the rolling `staging -> master` Release PR with **"Create a merge commit"** to ship to production!
+6. When an Epic completes, merge the rolling `staging -> main` Release PR with **"Create a merge commit"** to ship to production!

@@ -1,7 +1,16 @@
-import { test, describe } from "node:test";
+import { test, describe, after } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
-import {
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+const tmpStateDir = path.join(os.tmpdir(), `factory-bridge-test-${Date.now()}`);
+process.env.BRIDGE_STATE_DIR = tmpStateDir;
+
+const {
+  parseEnvContent,
+  parsePositiveInt,
   verifySignature,
   isAgentOrBotComment,
   isAuthorizedHuman,
@@ -11,11 +20,16 @@ import {
   classifyCiFailure,
   resolveHumanFeedbackTarget,
   coalesceComment,
+  flushPendingComments,
+  MAX_WEBHOOK_BYTES,
   queue,
   pendingComments,
-} from "../.factory/webhook-bridge.mjs";
+} = await import("../.factory/webhook-bridge.mjs");
 
 describe("Webhook Bridge Unit Tests", () => {
+  after(() => {
+    fs.rmSync(tmpStateDir, { recursive: true, force: true });
+  });
   test("verifySignature validates HMAC signatures and fails closed when secret is missing", () => {
     const secret = "test-secret-12345";
     const body = Buffer.from(JSON.stringify({ action: "labeled", issue: { number: 10 } }));
@@ -136,5 +150,35 @@ describe("Webhook Bridge Unit Tests", () => {
     assert.equal(recordDeliveryIfNew("delivery-abc-123", mockState), false);
     assert.equal(recordDeliveryIfNew("delivery-def-456", mockState), true);
     assert.equal(mockState.processedDeliveries.length, 2);
+  });
+
+  test("parseEnvContent preserves '&' values and strips inline comments while parsePositiveInt prevents NaN", () => {
+    const parsed = parseEnvContent(
+      [
+        "CI_WORKFLOW_NAME=CI & PR Evidence",
+        "MAX_CI_RETRIES=3 # 3-strike rescue cap",
+        'HUMAN_REVIEWER="octocat"',
+      ].join("\n")
+    );
+    assert.equal(parsed.CI_WORKFLOW_NAME, "CI & PR Evidence");
+    assert.equal(parsed.MAX_CI_RETRIES, "3");
+    assert.equal(parsePositiveInt(parsed.MAX_CI_RETRIES, 5), 3);
+    assert.equal(parsePositiveInt("invalid", 3), 3);
+    assert.equal(MAX_WEBHOOK_BYTES, 25 * 1024 * 1024);
+  });
+
+  test("flushPendingComments persists buffered debounced comments before shutdown", () => {
+    const threadKey = "pr:777";
+    coalesceComment(threadKey, { author: "alice", body: "Please check edge case" }, true, 777, "staging");
+    assert.equal(pendingComments.has(threadKey), true);
+
+    const flushed = flushPendingComments();
+    assert.equal(flushed, 1);
+    assert.equal(pendingComments.has(threadKey), false);
+
+    const idx = queue.findIndex((q) => q.threadKey === threadKey);
+    assert.ok(idx >= 0);
+    assert.match(queue[idx].prompt, /herdr agent prompt architect/);
+    queue.splice(idx, 1);
   });
 });

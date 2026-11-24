@@ -20,5 +20,6 @@ QWEN_MODEL=qwen3.8:27b
 QWEN_INFERENCE_URL=http://host.docker.internal:11434/v1
 GLM_WORKER_MODEL=glm-5.3
 
-# Local Webhook Port
+# Local Webhook Port & Optional Rootless Podman UID Mapping (set keep-id on rootless Podman; leave blank on Docker)
 WEBHOOK_PORT=8787
+FACTORY_USERNS_MODE=

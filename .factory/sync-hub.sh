@@ -8,8 +8,8 @@ if [ "${FACTORY_ROLE:-}" != "architect" ]; then
 fi
 
 cd /workspace
-if [ -n "$(git status --porcelain)" ]; then
-  echo "[sync-hub] WARNING: /workspace has uncommitted edits; skipping pull to avoid clobbering." >&2
+if [ -n "$(git status --porcelain -uno)" ]; then
+  echo "[sync-hub] WARNING: /workspace has uncommitted tracked edits; skipping pull to avoid clobbering." >&2
   exit 1
 fi
 
@@ -19,6 +19,10 @@ if ! git pull --ff-only origin staging --quiet; then
   echo "[sync-hub] WARNING: Non-fast-forward divergence on staging; manual check needed." >&2
   exit 1
 fi
+
+mkdir -p "$HOME/.hermes/profiles/architect" "$HOME/.hermes/profiles/orchestrator"
+[ -f /workspace/.factory/architect-seed.md ] && cp /workspace/.factory/architect-seed.md "$HOME/.hermes/profiles/architect/SOUL.md"
+[ -f /workspace/.factory/orchestrator-seed.md ] && cp /workspace/.factory/orchestrator-seed.md "$HOME/.hermes/profiles/orchestrator/SOUL.md"
 
 if [ -x /workspace/.factory/sync-skills.sh ]; then
   /workspace/.factory/sync-skills.sh architect

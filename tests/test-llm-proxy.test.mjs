@@ -1,7 +1,18 @@
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import http from "node:http";
-import { joinUpstreamUrl, checkRateLimit, recordUsage, telemetry } from "../.factory/llm-proxy.mjs";
+import os from "node:os";
+import path from "node:path";
+import {
+  joinUpstreamUrl,
+  checkRateLimit,
+  recordUsage,
+  loadSecrets,
+  parseNonNegativeInt,
+  verifyBearerToken,
+  telemetry,
+} from "../.factory/llm-proxy.mjs";
 
 describe("LLM Proxy Unit & Integration Tests", () => {
   let mockUpstream;
@@ -77,6 +88,34 @@ describe("LLM Proxy Unit & Integration Tests", () => {
     assert.ok(telemetry.routes.workerGlm.promptTokens >= 200);
     assert.ok(telemetry.routes.workerGlm.completionTokens >= 80);
     assert.ok(telemetry.routes.workerGlm.totalTokens >= 280);
+  });
+
+  test("loadSecrets strips inline comments and parseNonNegativeInt guards against NaN", () => {
+    const tmpFile = path.join(os.tmpdir(), `factory-llm-secrets-${Date.now()}.conf`);
+    fs.writeFileSync(
+      tmpFile,
+      [
+        "GLM_API_KEY=sk-test-123 # primary key",
+        "GLM_MAX_REQ_PER_HOUR=240 # hourly hub cap",
+        'GLM_UPSTREAM_URL="https://api.z.ai/api/coding/paas/v4"',
+      ].join("\n"),
+      "utf8"
+    );
+    const parsed = loadSecrets(tmpFile);
+    fs.rmSync(tmpFile, { force: true });
+
+    assert.equal(parsed.GLM_API_KEY, "sk-test-123");
+    assert.equal(parsed.GLM_MAX_REQ_PER_HOUR, "240");
+    assert.equal(parseNonNegativeInt(parsed.GLM_MAX_REQ_PER_HOUR, 100), 240);
+    assert.equal(parseNonNegativeInt("not-a-number", 180), 180);
+    assert.equal(parseNonNegativeInt("", 180), 180);
+  });
+
+  test("verifyBearerToken performs constant-time exact Bearer token matching", () => {
+    assert.equal(verifyBearerToken("Bearer secret-tok-123", "secret-tok-123"), true);
+    assert.equal(verifyBearerToken("Bearer wrong-tok-123", "secret-tok-123"), false);
+    assert.equal(verifyBearerToken("Bearer secret-tok", "secret-tok-123"), false);
+    assert.equal(verifyBearerToken("", "secret-tok-123"), false);
   });
 
   test("GET /health endpoint responds on proxy when active", async () => {

@@ -18,7 +18,9 @@ if [ ${#ARGS[@]} -lt 1 ]; then
 fi
 
 TARGET="${ARGS[0]}"
-SLUG="${ARGS[1]:-task}"
+RAW_SLUG="${ARGS[1]:-task}"
+SLUG="$(printf '%s' "$RAW_SLUG" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9._-]+/-/g; s/^-+|-+$//g')"
+[ -z "$SLUG" ] && SLUG="task"
 
 if [[ "$TARGET" == feature/* ]]; then
   BRANCH_NAME="$TARGET"
@@ -64,6 +66,8 @@ elif [ -f pnpm-lock.yaml ] && command -v pnpm >/dev/null 2>&1; then
   pnpm install --frozen-lockfile
 elif [ -f yarn.lock ] && command -v yarn >/dev/null 2>&1; then
   yarn install --frozen-lockfile
+elif [ -f package.json ]; then
+  npm install --no-audit --no-fund
 fi
 
 # 5. Refresh progressive-disclosure skill links

@@ -5,6 +5,7 @@
 *.env*
 .factory/retry-state.json
 .factory/architect-queue.json
+.factory/dead-letter-queue.json
 .factory/bridge.log
 *.pem
 playwright-report/

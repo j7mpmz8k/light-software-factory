@@ -5,10 +5,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 CONFIG_DIR="${HOME}/.config/light-factory"
 
-# Auto-detect rootless Podman socket if DOCKER_HOST is not explicitly set
+# Auto-detect rootless Podman socket & keep-id user namespace mapping if DOCKER_HOST is not explicitly set
 USER_ID="$(id -u)"
 if [ -z "${DOCKER_HOST:-}" ] && [ -S "/run/user/${USER_ID}/podman/podman.sock" ]; then
   export DOCKER_HOST="unix:///run/user/${USER_ID}/podman/podman.sock"
+  export FACTORY_USERNS_MODE="${FACTORY_USERNS_MODE:-keep-id}"
 fi
 
 REQUIRED_FILES=(
@@ -55,6 +56,21 @@ for cfg in "${CONFIG_DIR}/apps.env" "${CONFIG_DIR}/llm-secrets.env" "${CONFIG_DI
     FAIL=1
   fi
 done
+
+# Ensure Postgres passwords in compose.env are URI-safe (no '@', '/', ':', '?', '#', quotes, or whitespace)
+# and internal proxy tokens are not hardcoded fallback defaults
+if [ -f "${CONFIG_DIR}/compose.env" ]; then
+  if awk -F= '/^POSTGRES_.*_PASSWORD=/{val=substr($0, index($0,"=")+1); gsub(/^["'"'"']|["'"'"']$/,"",val); if (val ~ /[@\/:?#'"'"'"[:space:]]/) exit 1}' "${CONFIG_DIR}/compose.env"; then
+    :
+  else
+    echo "  ❌ POSTGRES_*_PASSWORD in compose.env contains URL-unsafe characters (@ / : ? # quotes or spaces). Use alphanumeric/hex characters." >&2
+    FAIL=1
+  fi
+  if grep -qE '^(ARCHITECT_PROXY_TOKEN=proxy-architect-only|GLM_WORKER_PROXY_TOKEN=proxy-worker-glm-only)\s*$' "${CONFIG_DIR}/compose.env"; then
+    echo "  ❌ Default placeholder proxy token found in compose.env — generate unique tokens with 'openssl rand -hex 16'." >&2
+    FAIL=1
+  fi
+fi
 
 # Check repo CODEOWNERS placeholder
 if [ -f "${REPO_DIR}/.github/CODEOWNERS" ] && grep -q '<YOUR_GITHUB_USERNAME>' "${REPO_DIR}/.github/CODEOWNERS"; then

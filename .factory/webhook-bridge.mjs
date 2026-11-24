@@ -2,6 +2,7 @@
 import http from "node:http";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
@@ -10,6 +11,38 @@ import { promisify } from "node:util";
 const isDirectRun = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
 
 const execFileAsync = promisify(execFile);
+
+function parseEnvContent(content) {
+  const parsed = {};
+  for (const line of String(content || "").split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const idx = trimmed.indexOf("=");
+    if (idx > 0) {
+      const key = trimmed.slice(0, idx).trim();
+      let val = trimmed.slice(idx + 1).trim();
+      if (!val.startsWith('"') && !val.startsWith("'")) {
+        val = val.replace(/\s+#.*$/, "").trim();
+      } else {
+        val = val.replace(/^["']|["']$/g, "");
+      }
+      parsed[key] = val;
+    }
+  }
+  return parsed;
+}
+
+function parsePositiveInt(val, fallback) {
+  if (val === undefined || val === null || String(val).trim() === "") return fallback;
+  const n = Number.parseInt(String(val).trim(), 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+function parseNonNegativeInt(val, fallback) {
+  if (val === undefined || val === null || String(val).trim() === "") return fallback;
+  const n = Number.parseInt(String(val).trim(), 10);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
 
 const candidateEnvFiles = [
   process.env.BRIDGE_ENV_FILE,
@@ -20,15 +53,9 @@ const candidateEnvFiles = [
 
 for (const envFile of candidateEnvFiles) {
   if (fs.existsSync(envFile)) {
-    for (const line of fs.readFileSync(envFile, "utf8").split("\n")) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith("#")) continue;
-      const idx = trimmed.indexOf("=");
-      if (idx > 0) {
-        const key = trimmed.slice(0, idx).trim();
-        const val = trimmed.slice(idx + 1).trim().replace(/^["']|["']$/g, "");
-        if (!process.env[key]) process.env[key] = val;
-      }
+    const parsed = parseEnvContent(fs.readFileSync(envFile, "utf8"));
+    for (const [key, val] of Object.entries(parsed)) {
+      if (!process.env[key]) process.env[key] = val;
     }
     break;
   }
@@ -45,27 +72,28 @@ function detectHumanReviewer() {
   }
 }
 
-const PORT = Number(process.env.WEBHOOK_PORT || 8787);
+const PORT = parsePositiveInt(process.env.WEBHOOK_PORT, 8787);
 const BIND_HOST = process.env.WEBHOOK_BIND_HOST || "0.0.0.0";
 const SECRET = process.env.GITHUB_WEBHOOK_SECRET || "";
 const ARCHITECT_PANE = process.env.ARCHITECT_PANE || "architect";
 const ORCHESTRATOR_PANE = process.env.ORCHESTRATOR_PANE || "orchestrator";
 const AGY_RESCUE_MODEL = process.env.AGY_RESCUE_MODEL || "claude-opus-5-5-high";
-const MAX_CI_RETRIES = Number(process.env.MAX_CI_RETRIES || 3);
+const MAX_CI_RETRIES = parsePositiveInt(process.env.MAX_CI_RETRIES, 3);
 const CI_WORKFLOW_NAME = process.env.CI_WORKFLOW_NAME || "CI & PR Evidence";
 const PROJECT_NUMBER = process.env.PROJECT_NUMBER || "";
 const REPO_FULL = process.env.FACTORY_REPO || "";
 const HUMAN_REVIEWER = detectHumanReviewer();
 
 const STATE_DIR = path.resolve(
-  process.env.BRIDGE_STATE_DIR || "/home/factory/.config/herdr/bridge-state"
+  process.env.BRIDGE_STATE_DIR || path.join(os.homedir(), ".config/herdr/bridge-state")
 );
 const RETRY_STATE_FILE = path.join(STATE_DIR, "retry-state.json");
 const QUEUE_STATE_FILE = path.join(STATE_DIR, "architect-queue.json");
-const COMMENT_COALESCE_MS = Number(process.env.COMMENT_COALESCE_MS || 8_000);
-const ARCHITECT_WAIT_TIMEOUT_MS = Number(process.env.ARCHITECT_WAIT_TIMEOUT_MS || 300_000);
-const STALL_WATCHDOG_INTERVAL_MS = Number(process.env.STALL_WATCHDOG_INTERVAL_MS || 900_000);
-const STALL_THRESHOLD_MS = Number(process.env.STALL_THRESHOLD_MS || 2_700_000);
+const COMMENT_COALESCE_MS = parsePositiveInt(process.env.COMMENT_COALESCE_MS, 8_000);
+const ARCHITECT_WAIT_TIMEOUT_MS = parsePositiveInt(process.env.ARCHITECT_WAIT_TIMEOUT_MS, 300_000);
+const STALL_WATCHDOG_INTERVAL_MS = parseNonNegativeInt(process.env.STALL_WATCHDOG_INTERVAL_MS, 900_000);
+const STALL_THRESHOLD_MS = parsePositiveInt(process.env.STALL_THRESHOLD_MS, 2_700_000);
+const MAX_WEBHOOK_BYTES = 25 * 1024 * 1024;
 
 const PRIORITY = {
   HUMAN_COMMENT: 10,
@@ -74,15 +102,19 @@ const PRIORITY = {
   PLAN_READY: 40,
 };
 
+const EXEC_CWD = fs.existsSync("/workspace") ? "/workspace" : process.cwd();
 const BOARD_SYNC_SCRIPT = path.resolve("/workspace/.factory/board-sync.sh");
 const SUB_ISSUE_SCRIPT = path.resolve("/workspace/.factory/sub-issue.sh");
 const SYNC_HUB_SCRIPT = path.resolve("/workspace/.factory/sync-hub.sh");
 const FACTORY_GH = path.resolve("/workspace/.factory/bin/gh");
 const RELEASE_PR_SCRIPT = path.resolve("/workspace/.factory/release-pr.sh");
 
+const FACTORY_BIN_DIR = path.dirname(FACTORY_GH);
 const ARCHITECT_EXEC_ENV = {
   ...process.env,
   FACTORY_ROLE: "architect",
+  PATH: `${FACTORY_BIN_DIR}:${process.env.PATH || "/usr/local/bin:/usr/bin:/bin"}`,
+  ...(REPO_FULL ? { GH_REPO: REPO_FULL, FACTORY_REPO: REPO_FULL } : {}),
 };
 
 // Fix D4: Do not drop comments quoting **[Architect]**; filter by sender bot status
@@ -106,7 +138,7 @@ function extractLinkedIssue(body = "", headBranch = "") {
 }
 
 async function ghAsArchitect(args, timeout = 20_000) {
-  return execFileAsync(FACTORY_GH, args, { env: ARCHITECT_EXEC_ENV, timeout });
+  return execFileAsync(FACTORY_GH, args, { env: ARCHITECT_EXEC_ENV, cwd: EXEC_CWD, timeout });
 }
 
 async function syncHubWorkspace() {
@@ -114,6 +146,7 @@ async function syncHubWorkspace() {
   try {
     await execFileAsync(SYNC_HUB_SCRIPT, [], {
       env: ARCHITECT_EXEC_ENV,
+      cwd: EXEC_CWD,
       timeout: 30_000,
     });
   } catch (err) {
@@ -127,6 +160,7 @@ async function syncBoardField(targetRef, fieldName, value) {
   try {
     await execFileAsync(BOARD_SYNC_SCRIPT, [String(targetRef), String(fieldName), String(value)], {
       env: ARCHITECT_EXEC_ENV,
+      cwd: EXEC_CWD,
       timeout: 20_000,
     });
   } catch (err) {
@@ -157,6 +191,7 @@ async function getParentEpic(issueNumber) {
   try {
     const { stdout } = await execFileAsync(SUB_ISSUE_SCRIPT, ["parent", String(issueNumber)], {
       env: ARCHITECT_EXEC_ENV,
+      cwd: EXEC_CWD,
       timeout: 15_000,
     });
     const parsed = JSON.parse(stdout.trim() || "null");
@@ -173,6 +208,7 @@ async function getSubIssueSummary(issueNumber) {
   try {
     const { stdout } = await execFileAsync(SUB_ISSUE_SCRIPT, ["summary", String(issueNumber)], {
       env: ARCHITECT_EXEC_ENV,
+      cwd: EXEC_CWD,
       timeout: 15_000,
     });
     return JSON.parse(stdout.trim() || "{}");
@@ -181,41 +217,71 @@ async function getSubIssueSummary(issueNumber) {
   }
 }
 
-async function inspectPrMeta(prNumber, headBranch = "") {
-  try {
-    const { stdout } = await ghAsArchitect([
-      "pr",
-      "view",
-      String(prNumber),
-      "--json",
-      "body,labels,mergeable,mergeStateStatus,headRefName,baseRefName,statusCheckRollup",
-    ]);
-    const pr = JSON.parse(stdout);
-    const labels = (pr.labels || []).map((l) => l.name);
-    const checks = pr.statusCheckRollup || [];
-    const gateCheck = checks.find((c) => (c.name || c.context) === "human-gate-guard");
-    const gateState = gateCheck
-      ? String(gateCheck.conclusion || gateCheck.state || gateCheck.status || "").toUpperCase()
-      : "UNKNOWN";
-    const humanGateBlocked = gateCheck ? gateState !== "SUCCESS" : false;
+async function fetchPrMetaOnce(prNumber, headBranch = "") {
+  const { stdout } = await ghAsArchitect([
+    "pr",
+    "view",
+    String(prNumber),
+    "--json",
+    "body,labels,mergeable,mergeStateStatus,headRefName,baseRefName,statusCheckRollup",
+  ]);
+  const pr = JSON.parse(stdout);
+  const labels = (pr.labels || []).map((l) => l.name);
+  const checks = pr.statusCheckRollup || [];
+  const gateCheck = checks.find((c) => (c.name || c.context) === "human-gate-guard");
+  const gateState = gateCheck
+    ? String(gateCheck.conclusion || gateCheck.state || gateCheck.status || "").toUpperCase()
+    : "MISSING";
+  const ciCheck = checks.find((c) => {
+    const nm = String(c.name || c.context || "");
+    return nm === "ci-and-evidence" || nm === CI_WORKFLOW_NAME;
+  });
+  const ciState = ciCheck
+    ? String(ciCheck.conclusion || ciCheck.state || ciCheck.status || "").toUpperCase()
+    : "MISSING";
 
-    return {
-      linkedIssue: extractLinkedIssue(pr.body, pr.headRefName || headBranch),
-      labels,
-      hasRescueEscalated: labels.includes("rescue-escalated"),
-      hasHumanGateLabel: labels.includes("human-gate"),
-      humanGateBlocked,
-      isConflicting: pr.mergeable === "CONFLICTING" || pr.mergeStateStatus === "DIRTY",
-      headRefName: pr.headRefName || headBranch,
-      baseRefName: pr.baseRefName || "",
-    };
+  return {
+    linkedIssue: extractLinkedIssue(pr.body, pr.headRefName || headBranch),
+    labels,
+    hasRescueEscalated: labels.includes("rescue-escalated"),
+    hasHumanGateLabel: labels.includes("human-gate"),
+    gateState,
+    ciSucceeded: ciState === "SUCCESS",
+    humanGateBlocked: gateCheck ? gateState !== "SUCCESS" : false,
+    isConflicting: pr.mergeable === "CONFLICTING" || pr.mergeStateStatus === "DIRTY",
+    headRefName: pr.headRefName || headBranch,
+    baseRefName: pr.baseRefName || "",
+  };
+}
+
+async function inspectPrMeta(prNumber, headBranch = "", waitIfGatePending = false) {
+  try {
+    let meta = await fetchPrMetaOnce(prNumber, headBranch);
+    // Close fail-open race if ci-evidence finishes seconds before human-gate-guard posts its status
+    if (
+      waitIfGatePending &&
+      (meta.gateState === "MISSING" ||
+        meta.gateState === "PENDING" ||
+        meta.gateState === "QUEUED" ||
+        meta.gateState === "IN_PROGRESS" ||
+        meta.gateState === "EXPECTED")
+    ) {
+      await new Promise((r) => setTimeout(r, 5000));
+      meta = await fetchPrMetaOnce(prNumber, headBranch);
+      if (meta.gateState !== "SUCCESS") {
+        meta.humanGateBlocked = true;
+      }
+    }
+    return meta;
   } catch {
     return {
       linkedIssue: extractLinkedIssue("", headBranch),
       labels: [],
       hasRescueEscalated: false,
       hasHumanGateLabel: false,
-      humanGateBlocked: false,
+      gateState: "ERROR",
+      ciSucceeded: false,
+      humanGateBlocked: Boolean(waitIfGatePending),
       isConflicting: false,
       headRefName: headBranch,
       baseRefName: "",
@@ -336,7 +402,7 @@ function enqueuePrompt(promptText, opts = {}) {
   sortQueue();
   saveQueueToDisk();
   console.log(`[bridge] Enqueued turn ${item.id} -> ${item.targetPane} [${item.kind}, prio=${item.priority}, clear=${item.shouldClear}] (queue size: ${queue.length}).`);
-  drainQueue();
+  if (!opts.skipDrain) drainQueue();
 }
 
 function enqueueArchitectPrompt(promptText, opts = {}) {
@@ -352,6 +418,55 @@ function resolveHumanFeedbackTarget(isPR, text = "", baseBranch = "") {
   if (isProductionBranch(baseBranch)) return "architect";
   if (/(?:^|\s)[/@]architect\b/i.test(String(text || ""))) return "architect";
   return "orchestrator";
+}
+
+function dispatchCoalescedEntry(threadKey, entry, triggerDrain = true) {
+  const commentsList = entry.comments
+    .map((c) => `- @${c.author}: "${c.body}"`)
+    .join("\n");
+  const combinedBody = entry.comments.map((c) => c.body || "").join("\n");
+  const target = resolveHumanFeedbackTarget(entry.isPR, combinedBody, entry.baseBranch);
+
+  if (target === "orchestrator") {
+    const formattedPrompt = [
+      `[GITHUB EVENT: HUMAN PR FEEDBACK] Comments on PR #${entry.num}:`,
+      commentsList,
+      `Run 'gh pr view ${entry.num} --comments' and 'gh pr diff ${entry.num}' (plus the linked Sub-Issue spec & DECISIONS.md) to load full thread context.`,
+      `If the human asked an implementation question, answer clearly on PR #${entry.num}. If they requested code changes, dispatch the fix via .factory/dispatch-worker.sh. If they requested an architectural/spec change, wake the Architect directly via 'herdr agent prompt architect "[ESCALATION FROM ORCHESTRATOR] PR #${entry.num}: <summary>"' (bot GitHub comments do not trigger webhooks).`,
+    ].join("\n");
+    enqueuePrompt(formattedPrompt, {
+      priority: PRIORITY.HUMAN_COMMENT,
+      kind: "human_pr_comment",
+      threadKey,
+      targetPane: ORCHESTRATOR_PANE,
+      shouldClear: true,
+      skipDrain: !triggerDrain,
+    });
+  } else {
+    const formattedPrompt = [
+      `[GITHUB EVENT: HUMAN FEEDBACK] Comments on ${entry.isPR ? "PR" : "Issue"} #${entry.num}:`,
+      commentsList,
+    ].join("\n");
+    enqueuePrompt(formattedPrompt, {
+      priority: PRIORITY.HUMAN_COMMENT,
+      kind: "human_comment",
+      threadKey,
+      targetPane: ARCHITECT_PANE,
+      shouldClear: false,
+      skipDrain: !triggerDrain,
+    });
+  }
+}
+
+function flushPendingComments() {
+  let flushed = 0;
+  for (const [threadKey, entry] of pendingComments.entries()) {
+    if (entry.timer) clearTimeout(entry.timer);
+    pendingComments.delete(threadKey);
+    dispatchCoalescedEntry(threadKey, entry, false);
+    flushed += 1;
+  }
+  return flushed;
 }
 
 function coalesceComment(threadKey, commentData, isPR, num, baseBranch = "") {
@@ -374,35 +489,7 @@ function coalesceComment(threadKey, commentData, isPR, num, baseBranch = "") {
 
   entry.timer = setTimeout(() => {
     pendingComments.delete(threadKey);
-    const commentsList = entry.comments
-      .map((c) => `- @${c.author}: "${c.body}"`)
-      .join("\n");
-    const combinedBody = entry.comments.map((c) => c.body || "").join("\n");
-    const target = resolveHumanFeedbackTarget(entry.isPR, combinedBody, entry.baseBranch);
-
-    if (target === "orchestrator") {
-      const formattedPrompt = [
-        `[GITHUB EVENT: HUMAN PR FEEDBACK] Comments on PR #${entry.num}:`,
-        commentsList,
-        `Run 'gh pr view ${entry.num} --comments' and 'gh pr diff ${entry.num}' (plus the linked Sub-Issue spec & DECISIONS.md) to load full thread context.`,
-        `If the human asked an implementation question, answer clearly on PR #${entry.num}. If they requested code changes, dispatch the fix via .factory/dispatch-worker.sh. If they requested an architectural/spec change, escalate to @Architect.`,
-      ].join("\n");
-      enqueueOrchestratorPrompt(formattedPrompt, {
-        priority: PRIORITY.HUMAN_COMMENT,
-        kind: "human_pr_comment",
-        threadKey,
-      });
-    } else {
-      const formattedPrompt = [
-        `[GITHUB EVENT: HUMAN FEEDBACK] Comments on ${entry.isPR ? "PR" : "Issue"} #${entry.num}:`,
-        commentsList,
-      ].join("\n");
-      enqueueArchitectPrompt(formattedPrompt, {
-        priority: PRIORITY.HUMAN_COMMENT,
-        kind: "human_comment",
-        threadKey,
-      });
-    }
+    dispatchCoalescedEntry(threadKey, entry, true);
   }, COMMENT_COALESCE_MS);
 }
 
@@ -663,7 +750,11 @@ async function handleEvent(event, payload) {
       await ghAsArchitect(["issue", "edit", String(parentEpic.number), "--remove-label", "in-progress"]).catch(() => {});
       await ghAsArchitect(["issue", "close", String(parentEpic.number)]).catch(() => {});
       if (fs.existsSync(RELEASE_PR_SCRIPT)) {
-        await execFileAsync(RELEASE_PR_SCRIPT, [String(parentEpic.number)], { env: ARCHITECT_EXEC_ENV }).catch(() => {});
+        await execFileAsync(RELEASE_PR_SCRIPT, [String(parentEpic.number)], {
+          env: ARCHITECT_EXEC_ENV,
+          cwd: EXEC_CWD,
+          timeout: 30_000,
+        }).catch(() => {});
       }
     } else {
       enqueueOrchestratorPrompt(
@@ -718,7 +809,7 @@ async function handleEvent(event, payload) {
       } catch {}
     }
     if (!prNumber) return;
-    const prMeta = await inspectPrMeta(prNumber, run.head_branch);
+    const prMeta = await inspectPrMeta(prNumber, run.head_branch, run.conclusion === "success");
 
     if (run.conclusion === "failure") {
       const retryState = loadRetryState();
@@ -840,14 +931,24 @@ async function reconcileStartupState() {
         );
       } else if (labels.includes("ready") && !isReadyEnqueued) {
         console.log(`[bridge:reconcile] Recovering unhandled 'ready' issue #${issue.number}`);
+        await ghAsArchitect([
+          "issue",
+          "edit",
+          String(issue.number),
+          "--remove-label",
+          "ready",
+          "--add-label",
+          "in-progress",
+        ]).catch(() => {});
+        await syncBoardField(issue.number, "Status", "In Progress");
         enqueueOrchestratorPrompt(
-          `[GITHUB RECONCILE: READY FOR EXECUTION] Issue #${issue.number} ("${issue.title}") is approved and labeled "ready". Decompose approved Spec via skill: to-tickets and .factory/sub-issue.sh, then dispatch Wave 0 to worker-agy (--model gemini-4-carbon-high) or Wave 1 via .factory/dispatch-worker.sh.`,
+          `[GITHUB RECONCILE: READY FOR EXECUTION] Issue #${issue.number} ("${issue.title}") was approved and claimed (ready -> in-progress). Decompose approved Spec via skill: to-tickets and .factory/sub-issue.sh, then dispatch Wave 0 to worker-agy (--model gemini-4-carbon-high) or Wave 1 via .factory/dispatch-worker.sh.`,
           { priority: PRIORITY.PLAN_READY, kind: "ready_dispatch", threadKey: `issue:${issue.number}` }
         );
       }
     }
 
-    // 2. Reconcile open PRs against staging
+    // 2. Reconcile open PRs against staging (conflicts or completed CI while bridge was offline)
     const { stdout: openPrsOut } = await ghAsArchitect([
       "pr",
       "list",
@@ -859,6 +960,30 @@ async function reconcileStartupState() {
       "number,headRefName",
     ]);
     const openPrs = JSON.parse(openPrsOut || "[]");
+    for (const openPr of openPrs) {
+      const alreadyQueued = queue.some((q) => q.threadKey === `pr:${openPr.number}`);
+      if (alreadyQueued) continue;
+
+      const prMeta = await inspectPrMeta(openPr.number, openPr.headRefName);
+      if (prMeta.labels.includes("blocked")) continue;
+
+      if (prMeta.isConflicting && !prMeta.hasRescueEscalated) {
+        await ghAsArchitect(["pr", "edit", String(openPr.number), "--add-label", "rescue-escalated"]).catch(() => {});
+        enqueueOrchestratorPrompt(
+          `[GITHUB RECONCILE: MERGE CONFLICT] Open PR #${openPr.number} has merge conflicts against staging. Dispatch 1-pass conflict resolution to worker-agy with '--model ${AGY_RESCUE_MODEL}' using skill: conflict-and-rescue via .factory/dispatch-worker.sh.`,
+          { priority: PRIORITY.CI_URGENT, kind: "merge_conflict", threadKey: `pr:${openPr.number}` }
+        );
+      } else if (prMeta.ciSucceeded) {
+        if (prMeta.humanGateBlocked || prMeta.hasHumanGateLabel || prMeta.gateState !== "SUCCESS") {
+          await surfaceAwaitingApproval(openPr.number, prMeta.linkedIssue, false);
+        } else {
+          enqueueOrchestratorPrompt(
+            `[GITHUB RECONCILE: CI PASSED] Open PR #${openPr.number} has passing CI and human-gate-guard checks. Review diff & evidence via .factory/fetch-evidence.sh and skill: pr-evidence-review; if verified, squash-merge to staging.`,
+            { priority: PRIORITY.REVIEW_WAVE, kind: "ci_passed", threadKey: `pr:${openPr.number}` }
+          );
+        }
+      }
+    }
     console.log(`[bridge] Reconciled ${openPrs.length} open staging PR(s) and ${openIssues.length} open issue(s).`);
   } catch (err) {
     console.warn("[bridge] Non-fatal reconciliation scan warning:", err.message);
@@ -879,8 +1004,24 @@ const server = http.createServer((req, res) => {
   }
 
   const chunks = [];
-  req.on("data", (c) => chunks.push(c));
+  let totalBytes = 0;
+  let aborted = false;
+
+  req.on("data", (c) => {
+    if (aborted) return;
+    totalBytes += c.length;
+    if (totalBytes > MAX_WEBHOOK_BYTES) {
+      aborted = true;
+      res.writeHead(413, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Webhook payload exceeds 25MB limit" }));
+      req.destroy();
+      return;
+    }
+    chunks.push(c);
+  });
+
   req.on("end", () => {
+    if (aborted) return;
     const raw = Buffer.concat(chunks);
     if (!verifySignature(raw, req.headers["x-hub-signature-256"])) {
       res.writeHead(401);
@@ -919,6 +1060,19 @@ if (isDirectRun) {
     console.error("[bridge] FATAL: GITHUB_WEBHOOK_SECRET is required (fail-closed). Set ALLOW_UNAUTHENTICATED_WEBHOOKS=1 only for local dev.");
     process.exit(1);
   }
+
+  const handleShutdown = (sig) => {
+    const flushed = flushPendingComments();
+    if (flushed > 0) {
+      console.log(`[bridge] Flushed ${flushed} pending debounced comment thread(s) to queue on ${sig}.`);
+    }
+    if (watchdogTimer) clearInterval(watchdogTimer);
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(0), 2000).unref();
+  };
+  process.on("SIGTERM", () => handleShutdown("SIGTERM"));
+  process.on("SIGINT", () => handleShutdown("SIGINT"));
+
   server.listen(PORT, BIND_HOST, () => {
     console.log(`[bridge] Listening on :${PORT} | Architect: ${ARCHITECT_PANE} | Orchestrator: ${ORCHESTRATOR_PANE} | Human Reviewer: @${HUMAN_REVIEWER || "unset"}`);
     if (queue.length > 0) drainQueue();
@@ -930,6 +1084,9 @@ if (isDirectRun) {
 }
 
 export {
+  parseEnvContent,
+  parsePositiveInt,
+  parseNonNegativeInt,
   verifySignature,
   isAgentOrBotComment,
   isAuthorizedHuman,
@@ -939,12 +1096,14 @@ export {
   classifyCiFailure,
   resolveHumanFeedbackTarget,
   coalesceComment,
+  flushPendingComments,
   enqueuePrompt,
   drainPane,
   drainQueue,
   activePanes,
   queue,
   pendingComments,
+  MAX_WEBHOOK_BYTES,
   server,
   watchdogTimer,
 };

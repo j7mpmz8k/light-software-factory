@@ -13,6 +13,7 @@ META_FILE="${AUTH_ROOT}/${ROLE}/meta.json"
 
 export FACTORY_ROLE="$ROLE"
 export FACTORY_AUTH_ROOT="$AUTH_ROOT"
+[ -n "${FACTORY_REPO:-}" ] && export GH_REPO="${GH_REPO:-$FACTORY_REPO}"
 export GH_CONFIG_DIR="/tmp/factory-gh-config-${ROLE}"
 mkdir -p "$GH_CONFIG_DIR"
 

@@ -4,7 +4,7 @@ ARG FACTORY_UID=1000
 ARG FACTORY_GID=1000
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    bash ca-certificates curl git jq openssh-server postgresql-client python3 python3-pip python3-venv gnupg \
+    bash ca-certificates curl git jq openssh-server postgresql-client procps python3 python3-pip python3-venv util-linux gnupg \
     dbus dbus-x11 libsecret-1-0 \
   && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
      | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
@@ -35,8 +35,9 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/home/factory/.cache/ms-playwright
 RUN (curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --dir /home/factory/.local/share/hermes-agent --skip-browser || pip install --user --break-system-packages hermes-agent) \
   && command -v hermes >/dev/null 2>&1
 
-# Install Antigravity CLI for worker-agy (multi-model Gemini 4 + Claude Opus 5.5)
+# Install Antigravity CLI for worker-agy (multi-model Gemini 4 + Claude Opus 5.5) and Playwright Chromium binary
 RUN curl -fsSL https://antigravity.google/cli/install.sh | bash \
+  && npx --yes playwright install chromium \
   && command -v agy >/dev/null 2>&1 \
   && command -v gh >/dev/null 2>&1
 

@@ -31,9 +31,15 @@ case "$CMD" in
     PARENT_NUM="${2:?parent_issue_num required}"
     CHILD_NUM="${3:?child_issue_num required}"
     CHILD_ID="$(gh api "repos/${REPO}/issues/${CHILD_NUM}" --jq '.id')"
-    gh api --method POST "repos/${REPO}/issues/${PARENT_NUM}/sub_issues" \
-      --input - <<< "{\"sub_issue_id\": ${CHILD_ID}}" >/dev/null
-    echo "[sub-issue] Linked Sub-Issue #${CHILD_NUM} -> Parent Epic #${PARENT_NUM}"
+    if OUT="$(gh api --method POST "repos/${REPO}/issues/${PARENT_NUM}/sub_issues" \
+      --input - <<< "{\"sub_issue_id\": ${CHILD_ID}}" 2>&1)"; then
+      echo "[sub-issue] Linked Sub-Issue #${CHILD_NUM} -> Parent Epic #${PARENT_NUM}"
+    elif printf '%s' "$OUT" | grep -qiE 'already|duplicate|422'; then
+      echo "[sub-issue] Sub-Issue #${CHILD_NUM} is already linked to Parent Epic #${PARENT_NUM} (idempotent)."
+    else
+      echo "$OUT" >&2
+      exit 1
+    fi
     ;;
 
   list)

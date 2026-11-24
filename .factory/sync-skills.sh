@@ -50,9 +50,11 @@ case "$AGENT_ID" in
     ;;
   worker-qwen)
     link_skills_into "$HOME/.hermes/skills" "$SHARED_DIR"
+    link_skills_into "$HOME/.hermes/profiles/qwen/skills" "$SHARED_DIR"
     ;;
   worker-glm)
     link_skills_into "$HOME/.hermes/skills" "$SHARED_DIR"
+    link_skills_into "$HOME/.hermes/profiles/glm/skills" "$SHARED_DIR"
     ;;
   *)
     echo "Usage: $0 <architect|orchestrator|worker-agy|worker-qwen|worker-glm>" >&2

@@ -18,10 +18,11 @@ fi
 
 cd "$REPO_DIR"
 
-# Auto-detect rootless Podman socket if DOCKER_HOST is not explicitly set
+# Auto-detect rootless Podman socket & keep-id user namespace mapping if DOCKER_HOST is not explicitly set
 USER_ID="$(id -u)"
 if [ -z "${DOCKER_HOST:-}" ] && [ -S "/run/user/${USER_ID}/podman/podman.sock" ]; then
   export DOCKER_HOST="unix:///run/user/${USER_ID}/podman/podman.sock"
+  export FACTORY_USERNS_MODE="${FACTORY_USERNS_MODE:-keep-id}"
 fi
 
 # Allocate pseudo-TTY only when attached to an interactive terminal

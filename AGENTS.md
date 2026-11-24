@@ -2,7 +2,7 @@
 
 ## 1. Core Principles
 1. **Never weaken tests or skip checks** to force a passing PR. Fix root causes.
-2. **One atomic Sub-Issue per PR.** Target `staging`, never `master`.
+2. **One atomic Sub-Issue per PR.** Target `staging`, never `main` (or `master`).
 3. **Clean-room resets:** Builders run `.factory/prep-branch.sh` to wipe the local `public` schema and dependencies before building.
 4. **Zero personal keys:** Use live 1-hour GitHub tokens via `.factory/enter-role.sh`.
 
@@ -30,5 +30,5 @@
 
 ## 5. Human Approval Gates & Spend Circuit Breakers
 - Any PR touching migrations (`migrations/`, `*.sql`), auth (`auth/`, `security/`), or factory config requires human approval.
-- Human approves via GitHub Reviews UI -> merges using **"Create a merge commit"** for the rolling `staging -> master` Release PR.
+- Human approves via GitHub Reviews UI -> merges using **"Create a merge commit"** for the rolling `staging -> main` Release PR.
 - **CI Strike Circuit Breaker:** After 3 CI failures, `webhook-bridge.mjs` triggers 1 rescue pass on `worker-agy` (`claude-opus-5-5-high`). If CI fails again after rescue, automated retries halt (`blocked` label) and the Architect alerts the human owner.

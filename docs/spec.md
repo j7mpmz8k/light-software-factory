@@ -216,7 +216,8 @@ chmod 600 ~/.config/light-factory/llm-secrets.env
 ### 2.2 Create Local Factory Directories & `.gitignore` Entries
 ```bash
 mkdir -p .factory/bin .factory/docker .factory/postgres \
-         .factory/role-skills/architect/pr-evidence-review \
+         .factory/role-skills/architect/grill-with-docs \
+         .factory/role-skills/architect/retro \
          .factory/role-skills/orchestrator/pr-evidence-review \
          .factory/role-skills/orchestrator/to-tickets \
          .agents/skills/conflict-and-rescue \
@@ -993,7 +994,7 @@ Progressive-disclosure skills allow agents to load domain playbooks on-demand wi
 > - [`.agents/skills/modern-web-standards/SKILL.md`](file:///home/admin/Github/light-software-factory/.agents/skills/modern-web-standards/SKILL.md) *(Modern UI/API patterns)*
 > - [`.agents/skills/postgres-migrations/SKILL.md`](file:///home/admin/Github/light-software-factory/.agents/skills/postgres-migrations/SKILL.md) *(Safe PostgreSQL migration playbook)*
 > - [`.agents/skills/e2e-testing/SKILL.md`](file:///home/admin/Github/light-software-factory/.agents/skills/e2e-testing/SKILL.md) *(Zero-mock Playwright verification playbook)*
-> - [`.factory/role-skills/architect/pr-evidence-review/SKILL.md`](file:///home/admin/Github/light-software-factory/.factory/role-skills/architect/pr-evidence-review/SKILL.md) *(Architect vision evidence evaluation)*
+> - [`.factory/role-skills/orchestrator/pr-evidence-review/SKILL.md`](file:///home/admin/Github/light-software-factory/.factory/role-skills/orchestrator/pr-evidence-review/SKILL.md) *(Orchestrator vision & diff evidence evaluation)*
 > - [`.agents/skills/conflict-and-rescue/SKILL.md`](file:///home/admin/Github/light-software-factory/.agents/skills/conflict-and-rescue/SKILL.md) *(Senior/Specialist 1-pass merge conflict & 3-strike rescue playbook)*
 
 ## Phase 7: CI Evidence Pipeline (PR + Post-Merge `staging`) & Trusted `human-gate-guard`
@@ -1169,10 +1170,11 @@ Run the tunnel on the **host machine**, forwarding public HTTPS traffic to `http
 >    - **Payload URL:** `<your-public-https-url>`
 >    - **Content type:** `application/json`
 >    - **Secret:** Paste `GITHUB_WEBHOOK_SECRET` from `~/.config/light-factory/bridge.env`
->    - **Which events?** Select **"Let me select individual events"** and check ONLY these **5 events**:
+>    - **Which events?** Select **"Let me select individual events"** and check ONLY these **6 events**:
 >      - `Issues` *(handles `plan` decomposition & `ready` dispatch)*
 >      - `Issue comments` *(routes human feedback & plan approvals)*
->      - `Pull requests` *(auto-advances Epic waves, syncs hub, triggers Final-Wave E2E & rolling `staging -> master` Release PR on Epic completion)*
+>      - `Pull requests` *(auto-advances Epic waves, syncs hub, sweeps merge conflicts & triggers rolling Release PR on Epic completion)*
+>      - `Pull request reviews` *(routes submitted PR reviews & `CHANGES_REQUESTED`)*
 >      - `Pull request review comments` *(routes inline code-review feedback)*
 >      - `Workflow runs` *(handles PR `CI & PR Evidence`, post-merge `staging` regression alerts, `Awaiting Approval` surfacing, 3-strike rescue escalation & spend circuit breaker)*
 >    - Click **Add webhook**.

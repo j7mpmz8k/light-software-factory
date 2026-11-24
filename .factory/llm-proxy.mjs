@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import http from "node:http";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,11 +8,25 @@ import { Readable, Transform, pipeline } from "node:stream";
 
 const isDirectRun = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
 
+function parseNonNegativeInt(val, fallback) {
+  if (val === undefined || val === null || String(val).trim() === "") return fallback;
+  const n = Number.parseInt(String(val).trim(), 10);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
+function verifyBearerToken(authHeader, expectedToken) {
+  if (!expectedToken || !authHeader) return false;
+  const expected = Buffer.from(`Bearer ${expectedToken}`, "utf8");
+  const actual = Buffer.from(String(authHeader), "utf8");
+  if (expected.length !== actual.length) return false;
+  return crypto.timingSafeEqual(expected, actual);
+}
+
 const SECRETS_FILE =
   process.env.LLM_SECRETS_FILE ||
   process.env.FACTORY_LLM_SECRETS ||
   "/run/factory-config/llm-secrets.env";
-const PORT = Number(process.env.LLM_PROXY_PORT || 4000);
+const PORT = parseNonNegativeInt(process.env.LLM_PROXY_PORT, 4000) || 4000;
 
 function loadSecrets(filePath) {
   if (!fs.existsSync(filePath)) {
@@ -25,7 +40,12 @@ function loadSecrets(filePath) {
     const idx = trimmed.indexOf("=");
     if (idx > 0) {
       const key = trimmed.slice(0, idx).trim();
-      const val = trimmed.slice(idx + 1).trim().replace(/^["']|["']$/g, "");
+      let val = trimmed.slice(idx + 1).trim();
+      if (!val.startsWith('"') && !val.startsWith("'")) {
+        val = val.replace(/\s+#.*$/, "").trim();
+      } else {
+        val = val.replace(/^["']|["']$/g, "");
+      }
       env[key] = val;
     }
   }
@@ -76,11 +96,13 @@ if (isDirectRun && !ARCHITECT_PROXY_TOKEN) {
   process.exit(1);
 }
 
-const GLM_MAX_REQ_PER_HOUR = Number(
-  secrets.GLM_MAX_REQ_PER_HOUR || process.env.GLM_MAX_REQ_PER_HOUR || 240
+const GLM_MAX_REQ_PER_HOUR = parseNonNegativeInt(
+  secrets.GLM_MAX_REQ_PER_HOUR ?? process.env.GLM_MAX_REQ_PER_HOUR,
+  240
 );
-const GLM_WORKER_MAX_REQ_PER_HOUR = Number(
-  secrets.GLM_WORKER_MAX_REQ_PER_HOUR || process.env.GLM_WORKER_MAX_REQ_PER_HOUR || 180
+const GLM_WORKER_MAX_REQ_PER_HOUR = parseNonNegativeInt(
+  secrets.GLM_WORKER_MAX_REQ_PER_HOUR ?? process.env.GLM_WORKER_MAX_REQ_PER_HOUR,
+  180
 );
 
 const ALLOWED_ARCHITECT_MODELS = new Set(
@@ -290,6 +312,7 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "GET" && rawUrl === "/health") {
     return sendJson(res, 200, {
       ok: true,
+      apiKeyConfigured: Boolean(GLM_API_KEY),
       routes: {
         glm: Boolean(GLM_UPSTREAM_URL),
         vision: Boolean(VISION_UPSTREAM_URL),
@@ -341,7 +364,7 @@ const server = http.createServer(async (req, res) => {
   const incomingAuth = String(req.headers["authorization"] || "");
 
   if (route === "glm" || route === "vision" || route === "backup") {
-    if (incomingAuth !== `Bearer ${ARCHITECT_PROXY_TOKEN}`) {
+    if (!verifyBearerToken(incomingAuth, ARCHITECT_PROXY_TOKEN)) {
       return sendJson(res, 401, { error: "Unauthorized for hub LLM route" });
     }
     if (!checkRateLimit("glm", GLM_MAX_REQ_PER_HOUR)) {
@@ -349,7 +372,7 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 429, { error: `Hub GLM hourly limit (${GLM_MAX_REQ_PER_HOUR}/hr) exceeded` });
     }
   } else if (route === "workerGlm") {
-    if (incomingAuth !== `Bearer ${GLM_WORKER_PROXY_TOKEN}`) {
+    if (!verifyBearerToken(incomingAuth, GLM_WORKER_PROXY_TOKEN)) {
       return sendJson(res, 401, { error: "Unauthorized for worker-glm route" });
     }
     if (!checkRateLimit("workerGlm", GLM_WORKER_MAX_REQ_PER_HOUR)) {
@@ -470,5 +493,7 @@ export {
   checkRateLimit,
   recordUsage,
   loadSecrets,
+  parseNonNegativeInt,
+  verifyBearerToken,
   ALLOWED_ARCHITECT_MODELS,
 };

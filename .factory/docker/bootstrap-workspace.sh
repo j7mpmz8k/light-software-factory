@@ -20,17 +20,25 @@ fi
 if [ ! -d /workspace/.git ]; then
   echo "[bootstrap] Cloning ${REPO_FULL} into isolated /workspace..."
   TOKEN="$(cat "$TOKEN_FILE")"
-  AUTH_URL="https://x-access-token:${TOKEN}@github.com/${REPO_FULL}.git"
-  if ! git clone --branch staging "$AUTH_URL" /workspace 2>/dev/null; then
+  CLEAN_URL="https://github.com/${REPO_FULL}.git"
+  BASIC_B64="$(printf 'x-access-token:%s' "$TOKEN" | base64 | tr -d '\r\n')"
+  GIT_AUTH_ENV=(
+    GIT_TERMINAL_PROMPT=0
+    GIT_CONFIG_COUNT=1
+    GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+    GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${BASIC_B64}"
+  )
+
+  if ! env "${GIT_AUTH_ENV[@]}" git clone --branch staging "$CLEAN_URL" /workspace 2>/dev/null; then
     echo "[bootstrap] Note: 'staging' branch not found on remote; cloning default branch and initializing staging..."
-    git clone "$AUTH_URL" /workspace
+    env "${GIT_AUTH_ENV[@]}" git clone "$CLEAN_URL" /workspace
     git -C /workspace checkout -b staging 2>/dev/null || git -C /workspace checkout staging
     if [ "$ROLE" = "architect" ]; then
       echo "[bootstrap] Pushing initial 'staging' branch to origin..."
-      git -C /workspace push -u "$AUTH_URL" staging || echo "[bootstrap] WARNING: Could not auto-push initial staging branch." >&2
+      env "${GIT_AUTH_ENV[@]}" git -C /workspace push -u origin staging || echo "[bootstrap] WARNING: Could not auto-push initial staging branch." >&2
     fi
   fi
-  git -C /workspace remote set-url origin "https://github.com/${REPO_FULL}.git"
+  git -C /workspace remote set-url origin "$CLEAN_URL"
 fi
 
 grep -Fq "enter-role.sh" "$HOME/.bashrc" 2>/dev/null || cat <<'EOF' >> "$HOME/.bashrc"

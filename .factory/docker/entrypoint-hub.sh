@@ -17,7 +17,9 @@ Host worker-agy worker-qwen worker-glm
 EOF
 chmod 600 "$HOME/.ssh/config"
 
-# 2. Auto-sync Hermes Architect profile (GLM-5.3 + GLM-5.3-Flash Vision)
+# 2. Refresh Herdr -> Hermes state plugin inside persistent volume, then auto-sync Architect & Orchestrator profiles
+herdr integration install hermes >/dev/null 2>&1 || true
+
 ARCH_MODEL="${ARCHITECT_MODEL:-glm-5.3}"
 ORCH_MODEL="${ORCHESTRATOR_MODEL:-${ARCH_MODEL}}"
 VIS_MODEL="${ARCHITECT_VISION_MODEL:-glm-5.3-flash}"
@@ -108,12 +110,14 @@ OPENAI_BASE_URL=http://llm-proxy:4000/glm
 EOF
 chmod 600 "$HOME/.hermes/profiles/orchestrator/.env"
 
-# 3. Bootstrap isolated /workspace repo clone
+# 3. Bootstrap isolated /workspace repo clone and persistent SOUL.md system prompts (immune to /clear)
 /usr/local/bin/bootstrap-workspace.sh
 if [ -f /workspace/.factory/enter-role.sh ]; then
   source /workspace/.factory/enter-role.sh architect
   [ -x /workspace/.factory/sync-hub.sh ] && /workspace/.factory/sync-hub.sh || true
 fi
+[ -f /workspace/.factory/architect-seed.md ] && cp /workspace/.factory/architect-seed.md "$HOME/.hermes/profiles/architect/SOUL.md"
+[ -f /workspace/.factory/orchestrator-seed.md ] && cp /workspace/.factory/orchestrator-seed.md "$HOME/.hermes/profiles/orchestrator/SOUL.md"
 if [ -x /workspace/.factory/sync-skills.sh ]; then
   /workspace/.factory/sync-skills.sh architect
   /workspace/.factory/sync-skills.sh orchestrator

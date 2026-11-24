@@ -19,6 +19,12 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Target integration branch (staging if present)
+        run: |
+          if git show-ref --verify --quiet refs/remotes/origin/staging; then
+            git checkout -B staging origin/staging
+          fi
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -61,7 +67,16 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh issue create \
-            --title "chore(hygiene): scheduled audit detected regressions" \
-            --label "hygiene,bug" \
-            --body "The scheduled weekly hygiene audit detected failures in typecheck, lint, or tests (Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}). Please assign to an idle worker for remediation."
+          gh label create "hygiene" --color "FBCA04" --description "Automated weekly codebase hygiene finding" --force || true
+          gh label create "bug"     --color "D73A4A" --description "Something isn't working" --force || true
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          MSG="The scheduled weekly hygiene audit detected failures in typecheck, lint, or tests (Run: ${RUN_URL}). Please assign to an idle worker for remediation."
+          EXISTING="$(gh issue list --state open --label "hygiene" --json number -q '.[0].number // empty' 2>/dev/null || true)"
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body "Weekly hygiene audit still failing (${RUN_URL})."
+          else
+            gh issue create \
+              --title "chore(hygiene): scheduled audit detected regressions" \
+              --label "hygiene,bug" \
+              --body "$MSG"
+          fi

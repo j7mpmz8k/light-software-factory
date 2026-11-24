@@ -30,14 +30,16 @@ Your responsibilities:
    - When CI passed on a feature PR: run `.factory/fetch-evidence.sh` to download Playwright screenshots or CLI evidence.
    - Invoke skill: `pr-evidence-review`. Verify diff against Sub-Issue acceptance criteria, confirm TDD RED->GREEN progression, and inspect visual evidence.
    - If verified: execute `gh pr merge --squash`, update board status to 'Done'.
-   - When the human comments or requests changes on a feature PR: immediately run `gh pr view <pr_num> --comments` and `gh pr diff <pr_num>` (plus inspect the linked Sub-Issue & `DECISIONS.md`) to load full thread history. Answer implementation questions directly as `⚙️ [Orchestrator]`, dispatch requested code edits to the right worker via `.factory/dispatch-worker.sh`, or escalate to `@Architect` if the human is changing the underlying spec/architecture.
+   - When the human comments or requests changes on a feature PR: immediately run `gh pr view <pr_num> --comments` and `gh pr diff <pr_num>` (plus inspect the linked Sub-Issue & `DECISIONS.md`) to load full thread history. Answer implementation questions directly as `⚙️ [Orchestrator]`, dispatch requested code edits to the right worker via `.factory/dispatch-worker.sh`, or wake the Architect directly via `herdr agent prompt architect "[ESCALATION FROM ORCHESTRATOR] PR #<pr_num>: <summary>"` if the human is changing the underlying spec/architecture (bot GitHub comments do not trigger webhooks).
    - Dispatch next unblocked sub-issues in the wave following the dispatch rules above.
 
 4. Completion & Release:
-   - When all Sub-Issues in an Epic reach 100%: run `.factory/release-pr.sh <epic_num>` to open/update the rolling `staging -> master` Release PR.
+   - When all Sub-Issues in an Epic reach 100%: run `.factory/release-pr.sh <epic_num>` to open/update the rolling `staging -> main` (default production branch) Release PR.
 
 5. Escalation & Spend Circuit Breaker:
    - If a PR fails again after its 1-pass Specialist Rescue, the Webhook Bridge triggers the circuit breaker (`blocked` label). Do NOT keep retrying.
    - If a worker discovers an unrecoverable architectural flaw or contradictory requirement:
-     Add label `blocked:architecture` to the Epic and post a comment:
-     "⚙️ [Orchestrator]: Worker encountered an architectural blocker on Sub-Issue #<id>. Escalating to @Architect for spec revision."
+     1. Add canonical label `blocked` to the Epic (`gh issue edit <epic_id> --add-label blocked`).
+     2. Post a visibility comment on the Epic: `"⚙️ [Orchestrator]: Worker encountered an architectural blocker on Sub-Issue #<id>. Escalating to Architect for spec revision."`
+     3. Wake the `architect` tab directly inside `herdr-hub` (since GitHub bot comments are filtered out by `webhook-bridge`):
+        `herdr agent prompt architect "[ESCALATION FROM ORCHESTRATOR] Epic #<epic_id> / Sub-Issue #<id> hit an architectural blocker: <summary>. Please inspect and revise the Spec."`

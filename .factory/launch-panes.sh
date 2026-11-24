@@ -43,19 +43,24 @@ herdr tab rename "$BRIDGE_TAB" bridge >/dev/null
 herdr pane rename "$BRIDGE_PANE" bridge >/dev/null
 herdr pane run "$BRIDGE_PANE" "node /workspace/.factory/webhook-bridge.mjs" >/dev/null
 
-# 2. Tab: architect (Chief Architect inside herdr-hub — GLM-5.3)
+# Ensure persistent Hermes SOUL.md system prompts are synced before starting hub agents (immune to /clear)
+mkdir -p "$HOME/.hermes/profiles/architect" "$HOME/.hermes/profiles/orchestrator"
+[ -f /workspace/.factory/architect-seed.md ] && cp /workspace/.factory/architect-seed.md "$HOME/.hermes/profiles/architect/SOUL.md"
+[ -f /workspace/.factory/orchestrator-seed.md ] && cp /workspace/.factory/orchestrator-seed.md "$HOME/.hermes/profiles/orchestrator/SOUL.md"
+
+# 2. Tab: architect (Chief Architect inside herdr-hub — GLM-5.3, unattended --yolo)
 ARCH_TAB="$(herdr tab create --workspace "$WS_ID" --cwd /workspace --label architect --focus)"
 ARCH_PANE="$(echo "$ARCH_TAB" | jq -r '.result.root_pane.pane_id')"
 herdr pane rename "$ARCH_PANE" architect >/dev/null
-herdr agent start architect --kind hermes --pane "$ARCH_PANE" -- --profile architect >/dev/null
+herdr agent start architect --kind hermes --pane "$ARCH_PANE" -- --profile architect --yolo >/dev/null
 
-# 3. Tab: orchestrator (Factory Orchestrator inside herdr-hub — GLM-5.3 + Vision)
+# 3. Tab: orchestrator (Factory Orchestrator inside herdr-hub — GLM-5.3 + Vision, unattended --yolo)
 ORCH_TAB="$(herdr tab create --workspace "$WS_ID" --cwd /workspace --label orchestrator --no-focus)"
 ORCH_PANE="$(echo "$ORCH_TAB" | jq -r '.result.root_pane.pane_id')"
 herdr pane rename "$ORCH_PANE" orchestrator >/dev/null
-herdr agent start orchestrator --kind hermes --pane "$ORCH_PANE" -- --profile orchestrator >/dev/null
+herdr agent start orchestrator --kind hermes --pane "$ORCH_PANE" -- --profile orchestrator --yolo >/dev/null
 
-# Helper: launch SSH agent tab with bash -lic and unattended execution
+# Helper: wait for worker SSH port 2222 readiness, then launch SSH agent tab with bash -lic
 launch_ssh_agent_tab() {
   local name="$1"
   local kind="$2"
@@ -66,6 +71,18 @@ launch_ssh_agent_tab() {
   pane_id="$(echo "$tab_json" | jq -r '.result.root_pane.pane_id')"
   herdr pane rename "$pane_id" "$name" >/dev/null
   printf '%s\n' "$pane_id" > "${HERDR_STATE_DIR}/${name}.pane_id"
+
+  local ssh_ready=0
+  for _ in $(seq 1 30); do
+    if ssh -o BatchMode=yes -o ConnectTimeout=2 "$name" true >/dev/null 2>&1; then
+      ssh_ready=1
+      break
+    fi
+    sleep 2
+  done
+  if [ "$ssh_ready" -ne 1 ]; then
+    echo "[launch-panes] Warning: SSH port 2222 on '${name}' not yet reachable after 60s; attempting pane launch..." >&2
+  fi
 
   herdr pane run "$pane_id" "HERDR_AGENT=${kind} ssh -t ${name} \"bash -lic '${remote_cmd}'\"" >/dev/null
 
@@ -81,7 +98,7 @@ launch_ssh_agent_tab() {
 
 # 4. Tab: worker-agy (Dynamic multi-model Antigravity CLI — Carbon / Neon / Hydrogen / Opus 5.5)
 printf '%s\n' "$AGY_DEFAULT_MODEL" > "${HERDR_STATE_DIR}/worker-agy.model"
-launch_ssh_agent_tab "worker-agy" "agy" "agy --model ${AGY_DEFAULT_MODEL} --mode=accept-edits"
+launch_ssh_agent_tab "worker-agy" "agy" "agy --model ${AGY_DEFAULT_MODEL} --dangerously-skip-permissions"
 
 # 5. Tab: worker-qwen (Free Local GPU builder)
 launch_ssh_agent_tab "worker-qwen" "hermes" "hermes --profile qwen --yolo"
@@ -89,13 +106,9 @@ launch_ssh_agent_tab "worker-qwen" "hermes" "hermes --profile qwen --yolo"
 # 6. Tab: worker-glm (Cheap GLM-5.3 API backup & overflow builder)
 launch_ssh_agent_tab "worker-glm" "hermes" "hermes --profile glm --yolo"
 
-echo "[launch-panes] Waiting for 'architect' and 'orchestrator' to reach idle and seeding..."
-if herdr agent wait architect --until idle --until done --timeout 30000 >/dev/null 2>&1; then
-  herdr agent prompt architect "$(cat /workspace/.factory/architect-seed.md)" >/dev/null || true
-fi
-if herdr agent wait orchestrator --until idle --until done --timeout 30000 >/dev/null 2>&1; then
-  herdr agent prompt orchestrator "$(cat /workspace/.factory/orchestrator-seed.md)" >/dev/null || true
-fi
+echo "[launch-panes] Waiting for 'architect' and 'orchestrator' (loaded via persistent SOUL.md) to settle..."
+herdr agent wait architect --timeout 30000 >/dev/null 2>&1 || true
+herdr agent wait orchestrator --timeout 30000 >/dev/null 2>&1 || true
 
 echo "[launch-panes] Native Herdr agents active:"
 herdr agent list || true

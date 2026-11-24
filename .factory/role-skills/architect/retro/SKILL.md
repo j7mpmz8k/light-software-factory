@@ -1,11 +1,11 @@
 ---
 name: retro
-description: Retrospective learning loop executed when release PRs merge to master.
+description: Retrospective learning loop executed when release PRs merge to main/master.
 ---
 
 # Release Retrospective & Continuous Learning
 
-When a rolling Release PR merges from `staging` into `master`, the Architect executes a retrospective pass to harvest lessons learned and improve future execution.
+When a rolling Release PR merges from `staging` into `main` (or `master`), the Architect executes a retrospective pass to harvest lessons learned and improve future execution.
 
 ## Retrospective Workflow
 
