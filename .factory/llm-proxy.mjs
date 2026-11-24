@@ -410,7 +410,9 @@ const server = http.createServer(async (req, res) => {
   recordModelRequest(route, requestedModel);
 
   const abortController = new AbortController();
-  res.on("close", () => abortController.abort());
+  res.on("close", () => {
+    if (!res.writableEnded) abortController.abort();
+  });
 
   try {
     const upstreamRes = await fetch(targetUrl, {

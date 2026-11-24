@@ -82,10 +82,8 @@ resolve_pane_id() {
     cat "$state_file"
     return 0
   fi
-  herdr api snapshot 2>/dev/null | jq -r --arg name "$target" '
-    (.result.snapshot.workspaces[]? // .result.workspaces[]?)
-    | .tabs[]?
-    | .panes[]?
+  herdr pane list 2>/dev/null | jq -r --arg name "$target" '
+    (.result.panes[]? // .panes[]? // empty)
     | select(.label == $name or .title == $name)
     | .pane_id
   ' | head -n1
@@ -116,7 +114,8 @@ if [ "$WORKER_NAME" = "worker-agy" ]; then
   if [ "$AGENT_ALIVE" -eq 1 ] && [ "$CURRENT_MODEL" = "$TARGET_MODEL" ]; then
     echo "[dispatch-worker] worker-agy already running '${TARGET_MODEL}'; waiting for idle and wiping context..."
     herdr agent wait worker-agy --until idle --until done --timeout 30000 2>/dev/null || true
-    herdr agent send-keys worker-agy "/clear" "Enter" 2>/dev/null || true
+    # Send /clear via agent prompt (without --wait; agent send-keys only accepts logical key names)
+    herdr agent prompt worker-agy "/clear" >/dev/null 2>&1 || true
     sleep 1
     herdr agent wait worker-agy --until idle --until done --timeout 5000 2>/dev/null || true
   else
@@ -124,13 +123,13 @@ if [ "$WORKER_NAME" = "worker-agy" ]; then
     if [ "$AGENT_ALIVE" -eq 1 ]; then
       # Wait for current atomic task to reach idle so we never interrupt an active git commit
       herdr agent wait worker-agy --until idle --until done --timeout 60000 2>/dev/null || true
-      herdr agent send-keys worker-agy "/exit" "Enter" 2>/dev/null || true
+      herdr agent prompt worker-agy "/exit" >/dev/null 2>&1 || true
       for _ in $(seq 1 10); do
         herdr agent get worker-agy >/dev/null 2>&1 || break
         sleep 0.5
       done
       if herdr agent get worker-agy >/dev/null 2>&1; then
-        herdr agent send-keys worker-agy "C-d" 2>/dev/null || true
+        herdr agent send-keys worker-agy ctrl+d 2>/dev/null || true
         sleep 1
       fi
     fi
@@ -174,7 +173,7 @@ echo "[dispatch-worker] Waiting for ${WORKER_NAME} to reach idle state..."
 herdr agent wait "$WORKER_NAME" --until idle --until done --timeout 30000 2>/dev/null || true
 
 echo "[dispatch-worker] Wiping LLM context memory for ${WORKER_NAME}..."
-herdr agent send-keys "$WORKER_NAME" "/clear" "Enter" 2>/dev/null || true
+herdr agent prompt "$WORKER_NAME" "/clear" >/dev/null 2>&1 || true
 sleep 1
 herdr agent wait "$WORKER_NAME" --until idle --until done --timeout 5000 2>/dev/null || true
 

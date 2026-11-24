@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
-# Usage: docker compose exec -it herdr-hub /workspace/.factory/launch-panes.sh
+# Usage:
+#   docker compose exec -it herdr-hub /workspace/.factory/launch-panes.sh [--headless]
 set -euo pipefail
+
+HEADLESS=0
+for arg in "$@"; do
+  case "$arg" in
+    --headless|--no-attach) HEADLESS=1 ;;
+  esac
+done
 
 source /workspace/.factory/enter-role.sh architect
 /workspace/.factory/sync-hub.sh || true
@@ -9,13 +17,17 @@ HERDR_STATE_DIR="${HERDR_STATE_DIR:-$HOME/.config/herdr}"
 AGY_DEFAULT_MODEL="${AGY_DEFAULT_MODEL:-gemini-4-hydrogen-high}"
 mkdir -p "$HERDR_STATE_DIR"
 
-for _ in $(seq 1 20); do
+for _ in $(seq 1 30); do
   herdr api snapshot >/dev/null 2>&1 && break
   sleep 0.5
 done
 
 EXISTING_WS="$(herdr api snapshot 2>/dev/null | jq -r '(.result.snapshot.workspaces[]? // .result.workspaces[]?) | select(.label == "factory") | .workspace_id' | head -n1 || true)"
 if [ -n "$EXISTING_WS" ]; then
+  if [ "$HEADLESS" -eq 1 ]; then
+    echo "[launch-panes] Workspace 'factory' (${EXISTING_WS}) already running (headless mode)."
+    exit 0
+  fi
   echo "[launch-panes] Workspace 'factory' (${EXISTING_WS}) already running — attaching to Herdr UI..."
   exec herdr
 fi
@@ -87,4 +99,8 @@ fi
 
 echo "[launch-panes] Native Herdr agents active:"
 herdr agent list || true
+if [ "$HEADLESS" -eq 1 ]; then
+  echo "[launch-panes] Headless bootstrap complete — all 6 tabs running in background."
+  exit 0
+fi
 exec herdr

@@ -9,7 +9,8 @@ Your responsibilities:
    - Invoke skill: to-tickets and run .factory/sub-issue.sh to generate vertical tracer-bullet Sub-Issues organized in waves.
    - Inspect `herdr agent list` for idle workers.
 
-2. Dynamic Model Selection & Worker Dispatch Priority (A1 + B2 Economics):
+2. Dynamic Model Selection, Label Hygiene & Worker Dispatch Priority (A1 + B2 Economics):
+   - Always apply label `in-progress` to a Sub-Issue when dispatching it (`gh issue edit <sub_issue> --add-label in-progress`) and remove `in-progress` when its PR merges so the 15-minute stall watchdog tracks active tasks accurately.
    - Always dispatch using:
      `.factory/dispatch-worker.sh <worker_name> "<sub_issue_prompt>" [--model <model_id>]`
    - **WAVE 0 (Golden E2E Acceptance Harness — Combined Senior Role):**

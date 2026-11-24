@@ -1198,9 +1198,8 @@ You will see one unified project **`herdr-software-factory`** with **7 healthy r
 >
 1. **Antigravity Multi-Model Worker (`worker-agy` -> `agy-auth` / `agy-dotgemini` — Google AI Ultra 5x):**
 ```bash
-docker compose exec -it worker-agy bash
-agy   # Complete Google AI Ultra 5x OAuth flow (keep "Use AI Credits" OFF so overflow uses cheaper worker-glm), then /exit
-exit
+docker compose exec -it -e SSH_CONNECTION=1 worker-agy agy
+# Copy the printed OAuth URL into your browser, paste back the code (keep "Use AI Credits" OFF), then /exit
 ```
 
 ### 10.3 Launch the Native 6-Tab Herdr Workspace (1-Command Recovery & Handoff)

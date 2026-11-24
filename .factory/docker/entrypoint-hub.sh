@@ -120,4 +120,11 @@ if [ -x /workspace/.factory/sync-skills.sh ]; then
 fi
 
 echo "[herdr-hub] Starting headless Herdr server (Architect=${ARCH_MODEL}, Orchestrator=${ORCH_MODEL}, Vision=${VIS_MODEL})..."
+# Auto-bootstrap the 6-tab factory workspace + webhook-bridge once herdr server is live (survives host reboots)
+if [ "${AUTO_LAUNCH_PANES:-1}" = "1" ] && [ -x /workspace/.factory/launch-panes.sh ]; then
+  (
+    sleep 2
+    /workspace/.factory/launch-panes.sh --headless || echo "[herdr-hub] Warning: headless auto-bootstrap exited non-zero; run launch-panes.sh manually." >&2
+  ) &
+fi
 exec herdr server

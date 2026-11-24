@@ -407,24 +407,24 @@ function coalesceComment(threadKey, commentData, isPR, num, baseBranch = "") {
 }
 
 async function sendAndWaitAgentTurn(pane, promptText, shouldClear = false) {
-  // 1. Ensure target agent is idle before starting
+  // 1. Ensure target agent is settled before starting
   try {
-    await execFileAsync("herdr", ["agent", "wait", pane, "--until", "idle", "--until", "done", "--timeout", "15000"]);
+    await execFileAsync("herdr", ["agent", "wait", pane, "--timeout", "15000"]);
   } catch {
     console.warn(`[bridge] Agent ${pane} not currently idle; continuing dispatch...`);
   }
 
-  // 2. Wipe LLM context if requested
+  // 2. Wipe LLM context if requested (via agent prompt without --wait; send-keys only accepts logical key names)
   if (shouldClear) {
     console.log(`[bridge] Sending /clear to ${pane} to reset LLM context before turn...`);
-    await execFileAsync("herdr", ["agent", "send-keys", pane, "/clear", "Enter"]).catch(() => {});
+    await execFileAsync("herdr", ["agent", "prompt", pane, "/clear"]).catch(() => {});
     await new Promise((r) => setTimeout(r, 1500));
     try {
-      await execFileAsync("herdr", ["agent", "wait", pane, "--until", "idle", "--until", "done", "--timeout", "5000"]);
+      await execFileAsync("herdr", ["agent", "wait", pane, "--timeout", "5000"]);
     } catch {}
   }
 
-  // 3. Dispatch prompt and wait for turn completion
+  // 3. Dispatch prompt and wait for settled state (idle, done, or blocked — per herdr --skill)
   await execFileAsync(
     "herdr",
     [
@@ -433,10 +433,6 @@ async function sendAndWaitAgentTurn(pane, promptText, shouldClear = false) {
       pane,
       promptText,
       "--wait",
-      "--until",
-      "idle",
-      "--until",
-      "done",
       "--timeout",
       String(ARCHITECT_WAIT_TIMEOUT_MS),
     ],
@@ -522,15 +518,16 @@ async function handleEvent(event, payload) {
     return;
   }
 
-  // 2. Issue labeled ready -> claim & dispatch wave via Orchestrator
+  // 2. Issue labeled ready -> deterministically swap ready -> in-progress & dispatch via Orchestrator
   if (event === "issues" && payload.action === "labeled" && payload.label?.name === "ready") {
     const issue = payload.issue;
     await syncHubWorkspace();
+    await ghAsArchitect(["issue", "edit", String(issue.number), "--remove-label", "ready", "--add-label", "in-progress"]).catch(() => {});
     await syncBoardField(issue.number, "Status", "In Progress");
 
     enqueueOrchestratorPrompt(
       [
-        `[GITHUB EVENT: READY FOR EXECUTION] Issue #${issue.number} ("${issue.title}") was approved and labeled "ready".`,
+        `[GITHUB EVENT: READY FOR EXECUTION] Issue #${issue.number} ("${issue.title}") was approved and claimed (ready -> in-progress).`,
         `Decompose this approved Spec into atomic Sub-Issues via skill: to-tickets and .factory/sub-issue.sh.`,
         `Dispatch Wave 0 (Golden Acceptance Harness) to worker-agy using '.factory/dispatch-worker.sh worker-agy "<prompt>" --model gemini-4-carbon-high' (or dispatch Wave 1 directly if trivial).`,
       ].join("\n"),
@@ -553,7 +550,12 @@ async function handleEvent(event, payload) {
 
     const isPR = Boolean(payload.issue?.pull_request || payload.pull_request);
     const num = (payload.issue || payload.pull_request).number;
-    const baseBranch = payload.pull_request?.base?.ref || "";
+    let baseBranch = payload.pull_request?.base?.ref || "";
+    // GitHub issue_comment payloads for PRs omit base.ref; inspect PR metadata so Release PRs route to Architect
+    if (isPR && !baseBranch) {
+      const prMeta = await inspectPrMeta(num);
+      baseBranch = prMeta.baseRefName || "";
+    }
     const threadKey = `${isPR ? "pr" : "issue"}:${num}`;
 
     coalesceComment(
@@ -598,7 +600,25 @@ async function handleEvent(event, payload) {
     return;
   }
 
-  // 5. PR Merged into staging -> Deterministic completion & release (Claude E1 recommendation)
+  // 4b. PR opened/updated against staging -> detect merge conflicts (GitHub skips CI on conflicting PRs)
+  if (
+    event === "pull_request" &&
+    (payload.action === "opened" || payload.action === "synchronize" || payload.action === "reopened") &&
+    payload.pull_request?.base?.ref === "staging"
+  ) {
+    const prNum = payload.pull_request.number;
+    const prMeta = await inspectPrMeta(prNum, payload.pull_request.head?.ref);
+    if (prMeta.isConflicting && !prMeta.hasRescueEscalated) {
+      await ghAsArchitect(["pr", "edit", String(prNum), "--add-label", "rescue-escalated"]).catch(() => {});
+      enqueueOrchestratorPrompt(
+        `[GITHUB EVENT: MERGE CONFLICT] PR #${prNum} has merge conflicts against staging (GitHub skipped CI). Dispatch 1-pass conflict resolution to worker-agy with '--model ${AGY_RESCUE_MODEL}' using skill: conflict-and-rescue via .factory/dispatch-worker.sh.`,
+        { priority: PRIORITY.CI_URGENT, kind: "merge_conflict", threadKey: `pr:${prNum}` }
+      );
+    }
+    return;
+  }
+
+  // 5. PR Merged into staging -> Deterministic completion, conflict sweep & release
   if (
     event === "pull_request" &&
     payload.action === "closed" &&
@@ -607,9 +627,32 @@ async function handleEvent(event, payload) {
   ) {
     const pr = payload.pull_request;
     await syncHubWorkspace();
+
+    // Sweep remaining open staging PRs for newly introduced merge conflicts
+    try {
+      const { stdout: openOut } = await ghAsArchitect([
+        "pr", "list", "--state", "open", "--base", "staging",
+        "--json", "number,mergeable,mergeStateStatus,labels",
+      ]);
+      for (const openPr of JSON.parse(openOut || "[]")) {
+        const labels = (openPr.labels || []).map((l) => l.name);
+        const conflicting = openPr.mergeable === "CONFLICTING" || openPr.mergeStateStatus === "DIRTY";
+        if (conflicting && !labels.includes("rescue-escalated") && !labels.includes("blocked")) {
+          await ghAsArchitect(["pr", "edit", String(openPr.number), "--add-label", "rescue-escalated"]).catch(() => {});
+          enqueueOrchestratorPrompt(
+            `[GITHUB EVENT: MERGE CONFLICT AFTER STAGING MERGE] Open PR #${openPr.number} now conflicts with staging after PR #${pr.number} merged. Dispatch 1-pass conflict resolution to worker-agy with '--model ${AGY_RESCUE_MODEL}' using skill: conflict-and-rescue.`,
+            { priority: PRIORITY.CI_URGENT, kind: "merge_conflict", threadKey: `pr:${openPr.number}` }
+          );
+        }
+      }
+    } catch (err) {
+      console.warn("[bridge] Non-fatal post-merge conflict sweep warning:", err.message);
+    }
+
     const linkedIssue = extractLinkedIssue(pr.body, pr.head?.ref);
     if (!linkedIssue) return;
 
+    await ghAsArchitect(["issue", "edit", String(linkedIssue), "--remove-label", "in-progress"]).catch(() => {});
     await syncBoardField(linkedIssue, "Status", "Done");
     const parentEpic = await getParentEpic(linkedIssue);
     if (!parentEpic) return;
@@ -617,6 +660,7 @@ async function handleEvent(event, payload) {
     const summary = await getSubIssueSummary(parentEpic.number);
     if (summary.total > 0 && summary.completed >= summary.total) {
       console.log(`[bridge] Epic #${parentEpic.number} 100% complete (${summary.completed}/${summary.total}). Deterministically closing & opening Release PR.`);
+      await ghAsArchitect(["issue", "edit", String(parentEpic.number), "--remove-label", "in-progress"]).catch(() => {});
       await ghAsArchitect(["issue", "close", String(parentEpic.number)]).catch(() => {});
       if (fs.existsSync(RELEASE_PR_SCRIPT)) {
         await execFileAsync(RELEASE_PR_SCRIPT, [String(parentEpic.number)], { env: ARCHITECT_EXEC_ENV }).catch(() => {});
@@ -662,9 +706,18 @@ async function handleEvent(event, payload) {
       return;
     }
 
-    const prs = run.pull_requests || [];
-    if (prs.length === 0) return;
-    const prNumber = prs[0].number;
+    let prNumber = run.pull_requests?.[0]?.number || null;
+    // GitHub frequently sends workflow_run.pull_requests = [] on PR runs; fall back to open PR lookup by head_branch
+    if (!prNumber && run.head_branch && run.head_branch !== "staging" && !isProductionBranch(run.head_branch)) {
+      try {
+        const { stdout } = await ghAsArchitect([
+          "pr", "list", "--head", String(run.head_branch), "--state", "open", "--json", "number",
+        ]);
+        const found = JSON.parse(stdout || "[]");
+        if (found.length > 0) prNumber = found[0].number;
+      } catch {}
+    }
+    if (!prNumber) return;
     const prMeta = await inspectPrMeta(prNumber, run.head_branch);
 
     if (run.conclusion === "failure") {

@@ -105,6 +105,10 @@ assert_eq "sync-skills.sh links conflict-and-rescue for worker-agy" "true" "$([ 
 assert_eq "sync-skills.sh links domain-modeling for worker-glm" "true" "$([ -L "${MOCK_HOME}/.hermes/skills/domain-modeling" ] && echo "true" || echo "false")"
 rm -rf "$MOCK_HOME"
 
+# 9. Regression guard: never pass text strings ("/clear", "/exit") or tmux "C-d" to herdr agent send-keys
+BAD_SENDKEYS="$(grep -rnE 'send-keys.*("/clear"|"/exit"|"C-d")' .factory/ || true)"
+assert_eq "no invalid text or tmux keys passed to herdr send-keys" "" "$BAD_SENDKEYS"
+
 echo "=== Scripts Integration Results: ${PASSED} passed, ${FAILED} failed ==="
 if [ "$FAILED" -gt 0 ]; then
   exit 1

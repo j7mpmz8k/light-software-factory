@@ -27,12 +27,12 @@ USER factory
 ENV HOME=/home/factory
 ENV PATH="/home/factory/.local/bin:${PATH}"
 
-# Install Herdr and Hermes Agent CLI, verifying both binaries exist at build time
+# Install Herdr and Hermes Agent CLI outside ~/.hermes (so named volume mounts never shadow the binary)
 RUN curl -fsSL https://herdr.dev/install.sh | sh \
   && command -v herdr >/dev/null 2>&1 \
   && (herdr integration install hermes || true)
 
-RUN (curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --non-interactive || pip install --break-system-packages hermes-agent) \
+RUN (curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --dir /home/factory/.local/share/hermes-agent --skip-browser || pip install --user --break-system-packages hermes-agent) \
   && command -v hermes >/dev/null 2>&1
 
 WORKDIR /workspace

@@ -41,4 +41,9 @@ fi
 cd /workspace 2>/dev/null || true
 EOF
 
+# Ensure login shells (`bash -lic`) also source ~/.bashrc so DATABASE_URL & enter-role.sh always load
+grep -Fq ".bashrc" "$HOME/.bash_profile" 2>/dev/null || cat <<'EOF' >> "$HOME/.bash_profile"
+[ -f "$HOME/.bashrc" ] && source "$HOME/.bashrc"
+EOF
+
 echo "[bootstrap] /workspace ready for role=${ROLE}."

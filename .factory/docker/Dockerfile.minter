@@ -8,5 +8,6 @@ ARG FACTORY_GID=1000
 RUN mkdir -p /run/factory-auth/architect /run/factory-auth/worker \
   && chown -R "${FACTORY_UID}:${FACTORY_GID}" /run/factory-auth
 
+ENV HOME=/tmp
 USER ${FACTORY_UID}:${FACTORY_GID}
 ENTRYPOINT ["node", "/opt/factory/token-refresher.mjs"]

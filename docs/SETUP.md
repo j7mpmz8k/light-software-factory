@@ -100,17 +100,18 @@ docker compose ps
 ```
 
 ### One-Time Antigravity Login (Only 1 Container!)
-Authenticate your AI Ultra 5x account once inside `worker-agy` (persists in the `agy-auth` / `agy-dotgemini` Docker volumes):
+Authenticate your AI Ultra 5x account once inside `worker-agy` (persists in the `agy-auth` / `agy-dotgemini` Docker volumes). Passing `-e SSH_CONNECTION=1` triggers Antigravity's copy-paste remote URL login flow inside headless Docker:
 ```bash
-docker compose exec -it worker-agy bash
-agy   # Follow login prompt, then /exit (recommend keeping "Use AI Credits" OFF so overflow uses cheaper worker-glm)
+docker compose exec -it -e SSH_CONNECTION=1 worker-agy agy
+# Copy the printed OAuth URL into your browser, paste back the code, then type /exit
+# (Recommend keeping "Use AI Credits" OFF so overflow uses cheaper worker-glm)
 ```
 
 ---
 
 ## 7. Step 6: Connect to the Live Herdr Workspace
 
-From your server (or via SSH from your laptop):
+`herdr-hub` automatically bootstraps `webhook-bridge` (port `8787`) and all 6 tabs in the background on `docker compose up -d` (and after host reboots). To attach interactively and watch live agent output from your server or laptop:
 
 ```bash
 docker compose exec -it herdr-hub /workspace/.factory/launch-panes.sh
