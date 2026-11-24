@@ -27,12 +27,13 @@ USER factory
 ENV HOME=/home/factory
 ENV PATH="/home/factory/.local/bin:${PATH}"
 
-# Install pinned Herdr and integration plugins
-RUN curl -fsSL https://herdr.dev/install.sh | sh
-RUN herdr integration install hermes || true
+# Install Herdr and Hermes Agent CLI, verifying both binaries exist at build time
+RUN curl -fsSL https://herdr.dev/install.sh | sh \
+  && command -v herdr >/dev/null 2>&1 \
+  && (herdr integration install hermes || true)
 
-# Install Hermes Agent CLI
-RUN curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --non-interactive || pip install --break-system-packages hermes-agent
+RUN (curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --non-interactive || pip install --break-system-packages hermes-agent) \
+  && command -v hermes >/dev/null 2>&1
 
 WORKDIR /workspace
 EXPOSE 8787

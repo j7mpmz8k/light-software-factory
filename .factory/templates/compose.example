@@ -4,6 +4,10 @@ POSTGRES_AGY_PASSWORD=change_this_agy_pw
 POSTGRES_QWEN_PASSWORD=change_this_qwen_pw
 POSTGRES_GLM_PASSWORD=change_this_glm_pw
 
+# Internal llm-proxy tokens (generate random strings, e.g. `openssl rand -hex 16`)
+ARCHITECT_PROXY_TOKEN=change_this_architect_proxy_tok
+GLM_WORKER_PROXY_TOKEN=change_this_worker_glm_proxy_tok
+
 # Control Plane Hub Models (GLM-5.3 — Always-On, Never Blocks Failover)
 ARCHITECT_MODEL=glm-5.3
 ARCHITECT_VISION_MODEL=glm-5.3-flash

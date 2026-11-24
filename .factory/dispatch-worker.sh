@@ -99,6 +99,11 @@ if [ "$WORKER_NAME" = "worker-agy" ]; then
   fi
 
   mkdir -p "$HERDR_STATE_DIR"
+  # Serialize concurrent model swaps on worker-agy to prevent /exit + pane run races
+  if command -v flock >/dev/null 2>&1; then
+    exec 9>"${HERDR_STATE_DIR}/worker-agy.lock"
+    flock -w 90 9 || { echo "Error: Timed out waiting for worker-agy dispatch lock." >&2; exit 1; }
+  fi
   MODEL_FILE="${HERDR_STATE_DIR}/worker-agy.model"
   CURRENT_MODEL=""
   [ -f "$MODEL_FILE" ] && CURRENT_MODEL="$(tr -d '[:space:]' < "$MODEL_FILE" || true)"

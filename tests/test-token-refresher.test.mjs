@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
-import { loadEnvFile, createAppJwt, writeAtomic } from "../.factory/token-refresher.mjs";
+import { loadEnvFile, createAppJwt, writeAtomic, scheduleNextRefresh } from "../.factory/token-refresher.mjs";
 
 describe("Token Refresher Unit Tests", () => {
   const tmpDir = path.join(os.tmpdir(), "factory-token-refresher-test-" + Date.now());
@@ -67,5 +67,11 @@ describe("Token Refresher Unit Tests", () => {
     assert.equal(stat.mode & 0o777, 0o600);
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test("scheduleNextRefresh is defined and schedules a clearable refresh timer", () => {
+    const timer = scheduleNextRefresh(60_000);
+    assert.ok(timer);
+    clearTimeout(timer);
   });
 });

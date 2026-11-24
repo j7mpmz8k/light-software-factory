@@ -31,10 +31,12 @@ ENV PATH="/home/factory/.local/bin:${PATH}"
 ENV PLAYWRIGHT_BROWSERS_PATH=/home/factory/.cache/ms-playwright
 
 # Install Hermes CLI for worker-qwen and worker-glm
-RUN curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --non-interactive || pip install --break-system-packages hermes-agent
+RUN (curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --non-interactive || pip install --break-system-packages hermes-agent) \
+  && command -v hermes >/dev/null 2>&1
 
 # Install Antigravity CLI for worker-agy (multi-model Gemini 4 + Claude Opus 5.5)
-RUN curl -fsSL https://antigravity.google/cli/install.sh | bash || true
+RUN curl -fsSL https://antigravity.google/cli/install.sh | bash \
+  && command -v agy >/dev/null 2>&1
 
 WORKDIR /workspace
 EXPOSE 2222

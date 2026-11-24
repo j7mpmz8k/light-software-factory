@@ -104,7 +104,7 @@ if [ -n "$ADD_OUT" ]; then
 fi
 
 if [ -z "$ITEM_ID" ]; then
-  ITEM_ID="$(gh project item-list "$PROJECT_NUMBER" --owner "$OWNER" --format json --jq --arg u "$ITEM_URL" '(.items[]? | select(.content.url == $u) | .id) // empty' 2>/dev/null || true)"
+  ITEM_ID="$(gh project item-list "$PROJECT_NUMBER" --owner "$OWNER" --limit 500 --format json --jq --arg u "$ITEM_URL" '(.items[]? | select(.content.url == $u) | .id) // empty' 2>/dev/null || true)"
 fi
 
 if [ -z "$ITEM_ID" ]; then
@@ -112,20 +112,20 @@ if [ -z "$ITEM_ID" ]; then
   exit 0
 fi
 
-# 3. Edit Field Value (handle SingleSelect vs Text)
-EDIT_FLAG=""
+# 3. Edit Field Value (handle SingleSelect vs Text cleanly without word-splitting)
+EDIT_ARGS=()
 if [ "$DATA_TYPE" = "SINGLE_SELECT" ]; then
   OPT_ID="$(echo "$FIELD_JSON" | jq -r --arg fv "$FIELD_VALUE" '(.options[]? | select(.name == $fv) | .id) // empty')"
   if [ -n "$OPT_ID" ]; then
-    EDIT_FLAG="--single-select-option-id ${OPT_ID}"
+    EDIT_ARGS=(--single-select-option-id "$OPT_ID")
   fi
 fi
 
-if [ -z "$EDIT_FLAG" ]; then
-  EDIT_FLAG="--text ${FIELD_VALUE}"
+if [ "${#EDIT_ARGS[@]}" -eq 0 ]; then
+  EDIT_ARGS=(--text "$FIELD_VALUE")
 fi
 
-if gh project item-edit --id "$ITEM_ID" --project-id "$PROJECT_ID" --field-id "$FIELD_ID" $EDIT_FLAG >/dev/null 2>&1; then
+if gh project item-edit --id "$ITEM_ID" --project-id "$PROJECT_ID" --field-id "$FIELD_ID" "${EDIT_ARGS[@]}" >/dev/null 2>&1; then
   echo "[board-sync] ${ITEM_LABEL} -> ${FIELD_NAME}: ${FIELD_VALUE}"
 else
   echo "[board-sync] WARNING: Could not update ${ITEM_LABEL} field ${FIELD_NAME}; continuing safely." >&2

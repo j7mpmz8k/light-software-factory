@@ -5,6 +5,8 @@ import {
   verifySignature,
   isAgentOrBotComment,
   isAuthorizedHuman,
+  isProductionBranch,
+  recordDeliveryIfNew,
   extractLinkedIssue,
   classifyCiFailure,
   resolveHumanFeedbackTarget,
@@ -14,7 +16,7 @@ import {
 } from "../.factory/webhook-bridge.mjs";
 
 describe("Webhook Bridge Unit Tests", () => {
-  test("verifySignature correctly validates HMAC signatures", () => {
+  test("verifySignature validates HMAC signatures and fails closed when secret is missing", () => {
     const secret = "test-secret-12345";
     const body = Buffer.from(JSON.stringify({ action: "labeled", issue: { number: 10 } }));
     const hmac = crypto.createHmac("sha256", secret);
@@ -22,12 +24,14 @@ describe("Webhook Bridge Unit Tests", () => {
     const validSig = `sha256=${hmac.digest("hex")}`;
     const invalidSig = "sha256=0000000000000000000000000000000000000000000000000000000000000000";
 
-    // When SECRET is provided, it validates against the HMAC
+    // When secret is provided, it validates against the HMAC
     assert.equal(verifySignature(body, validSig, secret), true);
     assert.equal(verifySignature(body, invalidSig, secret), false);
     assert.equal(verifySignature(body, "malformed-signature", secret), false);
-    // When no secret is configured, defaults to permissive
-    assert.equal(verifySignature(body, "any", ""), true);
+    // Fail-closed by default when secret is empty
+    assert.equal(verifySignature(body, "any", ""), false);
+    // Explicit allowInsecure override permits local dev mode
+    assert.equal(verifySignature(body, "any", "", true), true);
   });
 
   test("isAgentOrBotComment accurately filters out bots and automated senders", () => {
@@ -114,7 +118,23 @@ describe("Webhook Bridge Unit Tests", () => {
     // Explicit /architect or @architect escape hatch on any PR goes to Architect
     assert.equal(resolveHumanFeedbackTarget(true, "/architect should we rethink this schema?", "staging"), "architect");
     assert.equal(resolveHumanFeedbackTarget(true, "Hey @architect thoughts on this tradeoff?", "staging"), "architect");
-    // Rolling Release PR targeting master goes to Architect
+    // Rolling Release PR targeting main or master goes to Architect
+    assert.equal(resolveHumanFeedbackTarget(true, "Looks ready to ship", "main"), "architect");
     assert.equal(resolveHumanFeedbackTarget(true, "Looks ready to ship", "master"), "architect");
+  });
+
+  test("isProductionBranch recognizes both main and master", () => {
+    assert.equal(isProductionBranch("main"), true);
+    assert.equal(isProductionBranch("master"), true);
+    assert.equal(isProductionBranch("staging"), false);
+    assert.equal(isProductionBranch("feature/issue-12"), false);
+  });
+
+  test("recordDeliveryIfNew deduplicates repeated GitHub webhook deliveries", () => {
+    const mockState = { processedDeliveries: [] };
+    assert.equal(recordDeliveryIfNew("delivery-abc-123", mockState), true);
+    assert.equal(recordDeliveryIfNew("delivery-abc-123", mockState), false);
+    assert.equal(recordDeliveryIfNew("delivery-def-456", mockState), true);
+    assert.equal(mockState.processedDeliveries.length, 2);
   });
 });

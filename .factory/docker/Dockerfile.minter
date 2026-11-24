@@ -1,9 +1,12 @@
 FROM node:22-bookworm-slim
 
-# Pre-create volume mount targets and chown to 1000:1000 (factory) so named volumes
-# inherit non-root permissions and don't fail with EACCES on container start (Fix A2)
-RUN mkdir -p /run/factory-auth/architect /run/factory-auth/worker \
-  && chown -R 1000:1000 /run/factory-auth
+ARG FACTORY_UID=1000
+ARG FACTORY_GID=1000
 
-USER 1000:1000
+# Pre-create volume mount targets and chown to FACTORY_UID:FACTORY_GID so named volumes
+# inherit matching non-root permissions on any Linux/WSL/macOS host
+RUN mkdir -p /run/factory-auth/architect /run/factory-auth/worker \
+  && chown -R "${FACTORY_UID}:${FACTORY_GID}" /run/factory-auth
+
+USER ${FACTORY_UID}:${FACTORY_GID}
 ENTRYPOINT ["node", "/opt/factory/token-refresher.mjs"]

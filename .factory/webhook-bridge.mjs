@@ -266,9 +266,31 @@ function saveQueueToDisk() {
 
 const queue = loadQueueFromDisk();
 const pendingComments = new Map();
-let processing = false;
-let currentItemSummary = null;
+const activePanes = new Set();
 const DEAD_LETTER_FILE = path.join(STATE_DIR, "dead-letter-queue.json");
+const MAX_PROCESSED_DELIVERIES = 500;
+
+function isProductionBranch(ref = "") {
+  const clean = String(ref || "").trim().toLowerCase();
+  const configured = String(process.env.PROD_BRANCH || "").trim().toLowerCase();
+  if (configured && clean === configured) return true;
+  return clean === "main" || clean === "master";
+}
+
+function recordDeliveryIfNew(deliveryId, state = null) {
+  if (!deliveryId) return true;
+  const retryState = state || loadRetryState();
+  if (!Array.isArray(retryState.processedDeliveries)) retryState.processedDeliveries = [];
+  if (retryState.processedDeliveries.includes(deliveryId)) {
+    return false;
+  }
+  retryState.processedDeliveries.push(deliveryId);
+  if (retryState.processedDeliveries.length > MAX_PROCESSED_DELIVERIES) {
+    retryState.processedDeliveries = retryState.processedDeliveries.slice(-MAX_PROCESSED_DELIVERIES);
+  }
+  if (!state) saveRetryState(retryState);
+  return true;
+}
 
 function recordDeadLetter(item, reason) {
   try {
@@ -327,7 +349,7 @@ function enqueueOrchestratorPrompt(promptText, opts = {}) {
 
 function resolveHumanFeedbackTarget(isPR, text = "", baseBranch = "") {
   if (!isPR) return "architect";
-  if (String(baseBranch || "").toLowerCase() === "master") return "architect";
+  if (isProductionBranch(baseBranch)) return "architect";
   if (/(?:^|\s)[/@]architect\b/i.test(String(text || ""))) return "architect";
   return "orchestrator";
 }
@@ -423,25 +445,29 @@ async function sendAndWaitAgentTurn(pane, promptText, shouldClear = false) {
   return { delivered: true };
 }
 
-async function drainQueue() {
-  if (processing) return;
-  processing = true;
+async function drainPane(pane) {
+  if (activePanes.has(pane)) return;
+  activePanes.add(pane);
 
   try {
-    while (queue.length > 0) {
+    while (true) {
       sortQueue();
-      const next = queue[0];
-      currentItemSummary = `${next.kind}${next.threadKey ? ` (${next.threadKey})` : ""}`;
+      const next = queue.find((q) => (q.targetPane || ARCHITECT_PANE) === pane);
+      if (!next) break;
+
+      const summary = `${next.kind}${next.threadKey ? ` (${next.threadKey})` : ""}`;
       try {
-        await sendAndWaitAgentTurn(next.targetPane || ARCHITECT_PANE, next.prompt, next.shouldClear);
-        queue.shift();
+        await sendAndWaitAgentTurn(pane, next.prompt, next.shouldClear);
+        const idx = queue.findIndex((q) => q.id === next.id);
+        if (idx >= 0) queue.splice(idx, 1);
         saveQueueToDisk();
       } catch (err) {
         next.attempts = (next.attempts || 0) + 1;
-        console.error(`[bridge] Turn failed on ${currentItemSummary} (attempt ${next.attempts}/3):`, err.message);
+        console.error(`[bridge] Turn failed on ${pane} ${summary} (attempt ${next.attempts}/3):`, err.message);
         if (next.attempts >= 3) {
           console.error(`[bridge] Evicting item ${next.id} to dead-letter queue after 3 failed attempts.`);
-          const deadItem = queue.shift();
+          const idx = queue.findIndex((q) => q.id === next.id);
+          const deadItem = idx >= 0 ? queue.splice(idx, 1)[0] : next;
           recordDeadLetter(deadItem, err.message);
           saveQueueToDisk();
         } else {
@@ -451,15 +477,23 @@ async function drainQueue() {
       }
     }
   } finally {
-    currentItemSummary = null;
-    processing = false;
-    if (queue.length > 0) setTimeout(drainQueue, 5000);
+    activePanes.delete(pane);
+    if (queue.some((q) => (q.targetPane || ARCHITECT_PANE) === pane)) {
+      setTimeout(() => drainPane(pane), 5000);
+    }
   }
 }
 
-function verifySignature(rawBody, sigHeader, secretOverride = SECRET) {
-  const secret = secretOverride || SECRET;
-  if (!secret) return true;
+async function drainQueue() {
+  const panes = new Set(queue.map((q) => q.targetPane || ARCHITECT_PANE));
+  await Promise.all([...panes].map((pane) => drainPane(pane)));
+}
+
+function verifySignature(rawBody, sigHeader, secretOverride = SECRET, allowInsecure = false) {
+  const secret = secretOverride !== undefined ? secretOverride : SECRET;
+  if (!secret) {
+    return Boolean(allowInsecure || process.env.ALLOW_UNAUTHENTICATED_WEBHOOKS === "1");
+  }
   if (!sigHeader) return false;
   const hmac = crypto.createHmac("sha256", secret);
   hmac.update(rawBody);
@@ -596,17 +630,17 @@ async function handleEvent(event, payload) {
     return;
   }
 
-  // 5b. Production Release PR Merged into master -> Trigger Architect Retrospective
+  // 5b. Production Release PR Merged into main/master -> Trigger Architect Retrospective
   if (
     event === "pull_request" &&
     payload.action === "closed" &&
     payload.pull_request?.merged === true &&
-    payload.pull_request?.base?.ref === "master"
+    isProductionBranch(payload.pull_request?.base?.ref)
   ) {
     const pr = payload.pull_request;
     await syncHubWorkspace();
     enqueueArchitectPrompt(
-      `[GITHUB EVENT: PRODUCTION RELEASE MERGED] Release PR #${pr.number} merged into master. Run skill: retro, update AGENTS.md and GLOSSARY.md, and run .factory/sync-skills.sh.`,
+      `[GITHUB EVENT: PRODUCTION RELEASE MERGED] Release PR #${pr.number} merged into ${pr.base.ref}. Run skill: retro, update AGENTS.md and GLOSSARY.md, and run .factory/sync-skills.sh.`,
       { priority: PRIORITY.PLAN_READY, kind: "release_retro", threadKey: `pr:${pr.number}` }
     );
     return;
@@ -669,7 +703,7 @@ async function handleEvent(event, payload) {
         saveRetryState(retryState);
       }
       if (prMeta.humanGateBlocked || prMeta.hasHumanGateLabel) {
-        await surfaceAwaitingApproval(prNumber, prMeta.linkedIssue, prMeta.baseRefName === "master");
+        await surfaceAwaitingApproval(prNumber, prMeta.linkedIssue, isProductionBranch(prMeta.baseRefName));
         enqueueOrchestratorPrompt(
           `[GITHUB EVENT: CI PASSED — GATED] PR #${prNumber} passed CI, moved to Awaiting Approval. Post review summary and STOP.`,
           { priority: PRIORITY.REVIEW_WAVE, kind: "ci_gated", threadKey: `pr:${prNumber}` }
@@ -801,6 +835,14 @@ const server = http.createServer((req, res) => {
       return;
     }
 
+    const deliveryId = String(req.headers["x-github-delivery"] || "").trim();
+    if (deliveryId && !recordDeliveryIfNew(deliveryId)) {
+      console.log(`[bridge] Ignored duplicate webhook delivery ${deliveryId}.`);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ duplicate: true, deliveryId }));
+      return;
+    }
+
     const event = req.headers["x-github-event"];
     let payload;
     try {
@@ -812,7 +854,7 @@ const server = http.createServer((req, res) => {
     }
 
     res.writeHead(202, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ received: event }));
+    res.end(JSON.stringify({ received: event, deliveryId: deliveryId || null }));
 
     handleEvent(event, payload).catch((err) => console.error("[bridge] Event error:", err));
   });
@@ -820,6 +862,10 @@ const server = http.createServer((req, res) => {
 
 let watchdogTimer = null;
 if (isDirectRun) {
+  if (!SECRET && process.env.ALLOW_UNAUTHENTICATED_WEBHOOKS !== "1") {
+    console.error("[bridge] FATAL: GITHUB_WEBHOOK_SECRET is required (fail-closed). Set ALLOW_UNAUTHENTICATED_WEBHOOKS=1 only for local dev.");
+    process.exit(1);
+  }
   server.listen(PORT, BIND_HOST, () => {
     console.log(`[bridge] Listening on :${PORT} | Architect: ${ARCHITECT_PANE} | Orchestrator: ${ORCHESTRATOR_PANE} | Human Reviewer: @${HUMAN_REVIEWER || "unset"}`);
     if (queue.length > 0) drainQueue();
@@ -834,12 +880,16 @@ export {
   verifySignature,
   isAgentOrBotComment,
   isAuthorizedHuman,
+  isProductionBranch,
+  recordDeliveryIfNew,
   extractLinkedIssue,
   classifyCiFailure,
   resolveHumanFeedbackTarget,
   coalesceComment,
   enqueuePrompt,
+  drainPane,
   drainQueue,
+  activePanes,
   queue,
   pendingComments,
   server,

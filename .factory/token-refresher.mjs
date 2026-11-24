@@ -166,6 +166,23 @@ async function refreshAll() {
   }
 }
 
+let refreshTimer = null;
+
+function scheduleNextRefresh(delayMs = REFRESH_MS) {
+  if (refreshTimer) clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(async () => {
+    try {
+      await refreshAll();
+      scheduleNextRefresh(REFRESH_MS);
+    } catch (err) {
+      console.error("[auth-minter] Scheduled token refresh failed; retrying in 60s:", err.message);
+      scheduleNextRefresh(60_000);
+    }
+  }, delayMs);
+  if (typeof refreshTimer.unref === "function") refreshTimer.unref();
+  return refreshTimer;
+}
+
 if (isDirectRun) {
   let booted = false;
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -186,7 +203,8 @@ if (isDirectRun) {
 
   if (RUN_ONCE) process.exit(0);
 
-  scheduleNextRefresh(REFRESH_MS);
+  const activeTimer = scheduleNextRefresh(REFRESH_MS);
+  if (typeof activeTimer.ref === "function") activeTimer.ref();
 }
 
 export {
@@ -195,5 +213,6 @@ export {
   getBotUserId,
   mintInstallationToken,
   refreshAll,
+  scheduleNextRefresh,
   writeAtomic,
 };

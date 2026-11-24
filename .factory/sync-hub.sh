@@ -22,6 +22,7 @@ fi
 
 if [ -x /workspace/.factory/sync-skills.sh ]; then
   /workspace/.factory/sync-skills.sh architect
+  /workspace/.factory/sync-skills.sh orchestrator
 fi
 
 echo "[sync-hub] herdr-hub /workspace synced to origin/staging ($(git rev-parse --short HEAD))."

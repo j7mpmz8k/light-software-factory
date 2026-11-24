@@ -13,7 +13,8 @@ ENV_FILE="${BRIDGE_ENV_FILE:-/run/factory-config/bridge.env}"
 
 EPIC_NUM="${1:-}"
 REPO="${FACTORY_REPO:-$(gh repo view --json nameWithOwner -q .nameWithOwner)}"
-BASE_BRANCH="${RELEASE_BASE_BRANCH:-master}"
+DEFAULT_BRANCH="$(gh repo view "$REPO" --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null || echo "main")"
+BASE_BRANCH="${RELEASE_BASE_BRANCH:-${DEFAULT_BRANCH:-main}}"
 HEAD_BRANCH="staging"
 
 REVIEWER="${HUMAN_REVIEWER:-}"

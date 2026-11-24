@@ -2,7 +2,7 @@ name: CI & PR Evidence
 
 on:
   pull_request:
-    branches: [staging, master]
+    branches: [staging, main, master]
   push:
     branches: [staging]
 
@@ -43,25 +43,57 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: "npm"
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Install Node dependencies
+        if: hashFiles('package.json') != ''
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
 
       - name: Run Database Migrations (Clean-Room Check)
+        if: hashFiles('package.json') != ''
         run: npm run db:migrate --if-present
 
       - name: Lint
+        if: hashFiles('package.json') != ''
         run: npm run lint --if-present
 
       - name: Typecheck
+        if: hashFiles('package.json') != ''
         run: npm run typecheck --if-present
 
-      - name: Unit & Integration Tests (Full Suite)
-        run: npm test
+      - name: Unit & Integration Tests (Node App)
+        if: hashFiles('package.json') != ''
+        run: npm test --if-present
 
       - name: Build
-        run: npm run build
+        if: hashFiles('package.json') != ''
+        run: npm run build --if-present
+
+      - name: Run Factory Verification Suite (If Present)
+        if: hashFiles('tests/test-scripts.sh') != ''
+        run: |
+          chmod +x .factory/*.sh .factory/bin/gh .factory/postgres/*.sh .factory/docker/*.sh tests/test-scripts.sh
+          node --test tests/*.test.mjs
+          ./tests/test-scripts.sh
+
+      - name: Run Python Tests (If Present)
+        if: hashFiles('pyproject.toml', 'requirements.txt') != ''
+        run: |
+          python3 -m pip install -q pytest || true
+          if [ -f requirements.txt ]; then python3 -m pip install -q -r requirements.txt; fi
+          pytest
+
+      - name: Run Go Tests (If Present)
+        if: hashFiles('go.mod') != ''
+        run: go test ./...
+
+      - name: Run Rust Tests (If Present)
+        if: hashFiles('Cargo.toml') != ''
+        run: cargo test
 
       - name: Install Playwright & Run Full E2E Suite + Visual Evidence
         if: hashFiles('playwright.config.*') != ''
@@ -103,22 +135,21 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: prNumber,
-              per_page: 100
+              per_page: 100,
             });
-
-            const existing = comments.find(c => c.body && c.body.includes(marker));
+            const existing = comments.find((c) => (c.body || "").includes(marker));
             if (existing) {
               await github.rest.issues.updateComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 comment_id: existing.id,
-                body
+                body,
               });
             } else {
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: prNumber,
-                body
+                body,
               });
             }
