@@ -29,9 +29,14 @@ Once a Spec is approved, the Factory Orchestrator decomposes the feature into at
      - Verify Wave 0's golden acceptance test and full CI suite run completely GREEN with visual/CLI evidence.
      - Any 3-strike CI loop or semantic merge conflict escalates to `worker-agy --model claude-opus-5-5-high` (or `gemini-4-carbon-high`) for strictly 1 rescue pass.
 
-3. **Sub-Issue Execution:**
+3. **Dynamic DAG Work-Stealing & Schema Migration Serialization:**
+   - **Never Treat Waves as Rigid Idle Barriers:** Declare explicit `Depends On: #<sub_issue_num>` (or `Depends On: None`) in every Sub-Issue body. As soon as a Sub-Issue's specific `Depends On` dependency merges to `staging`, dispatch it immediately to any idle worker — never leave an idle worker waiting on unrelated slower PRs from the same wave.
+   - **Serialize Database Schema Migrations:** Never schedule two database-schema-modifying Sub-Issues in parallel without a `Depends On:` chain (or group closely coupled tables into one foundational schema Sub-Issue), and require UTC timestamp-prefixed migration filenames (`YYYYMMDDHHMMSS_<slug>.sql`).
+
+4. **Sub-Issue Execution:**
    - Call `.factory/sub-issue.sh` to generate native GitHub Sub-Issues linked to the parent Epic.
    - Every Sub-Issue must include:
+     - Explicit `Depends On: None` or `Depends On: #<sub_issue_num>`.
      - Clear acceptance criteria.
      - Target domain types referencing `GLOSSARY.md`.
      - Explicit Test Plan (Red -> Green expectation).

@@ -587,7 +587,7 @@ gh api --method POST "/repos/${REPO_FULL}/rulesets" --input - <<EOF
   "bypass_actors": [],
   "conditions": {
     "ref_name": {
-      "include": ["refs/heads/master", "refs/heads/staging"],
+      "include": ["refs/heads/main", "refs/heads/master", "refs/heads/staging"],
       "exclude": []
     }
   },
@@ -597,7 +597,7 @@ gh api --method POST "/repos/${REPO_FULL}/rulesets" --input - <<EOF
     {
       "type": "required_status_checks",
       "parameters": {
-        "strict_required_status_checks_policy": false,
+        "strict_required_status_checks_policy": true,
         "do_not_enforce_on_create": true,
         "required_status_checks": [
           { "context": "ci-and-evidence" },
@@ -609,10 +609,10 @@ gh api --method POST "/repos/${REPO_FULL}/rulesets" --input - <<EOF
 }
 EOF
 
-# 2. Gate master (Human Owner Only) — Neither Hub nor Workers can merge or push
+# 2. Gate production branch main/master (Human Owner Only) — Neither Hub nor Workers can merge or push
 gh api --method POST "/repos/${REPO_FULL}/rulesets" --input - <<EOF
 {
-  "name": "Factory: Gate master (Human Only)",
+  "name": "Factory: Gate Production (Human Only)",
   "target": "branch",
   "enforcement": "active",
   "bypass_actors": [
@@ -624,7 +624,7 @@ gh api --method POST "/repos/${REPO_FULL}/rulesets" --input - <<EOF
   ],
   "conditions": {
     "ref_name": {
-      "include": ["refs/heads/master"],
+      "include": ["refs/heads/main", "refs/heads/master"],
       "exclude": []
     }
   },

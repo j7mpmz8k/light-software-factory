@@ -15,5 +15,7 @@ All database migrations trigger the `human-gate-guard` firewall and require clea
    - Migrations must apply cleanly from an empty `public` schema (verified by `.factory/prep-branch.sh` and CI `npm run db:migrate`).
    - Do not depend on superuser privileges — extensions (`pgcrypto`, `uuid-ossp`) live in the pre-provisioned `extensions` schema already on `search_path`.
    - Avoid destructive column drops or lock-heavy table rewrites without an explicit multi-step deprecation plan in `DECISIONS.md`.
-3. **Test Against Real Postgres:**
+3. **Prevent Parallel Migration Filename Collisions:**
+   - Always name migration files using UTC timestamp or UUID prefixes (e.g., `YYYYMMDDHHMMSS_<descriptive_slug>.sql` such as `20261124013000_create_organizations.sql`) — **never** hand-number bare sequential prefixes (`0001_`, `0002_`) that collide when two workers build branches concurrently.
+4. **Test Against Real Postgres:**
    - Integration tests must run migrations against `$DATABASE_URL` (`app_agy`, `app_qwen`, `app_glm`) and verify constraints reject invalid data as expected.

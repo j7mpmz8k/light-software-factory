@@ -18,6 +18,7 @@ When CI (`CI & PR Evidence`) passes on a feature PR targeting `staging`, execute
    - PR description documents TDD RED -> GREEN progression and deterministic test outputs.
    - Code favors **Deep Modules** over shallow wrappers and follows `GLOSSARY.md`.
 4. **Take Action:**
-   - **If clean and ungated:** Run `gh pr review <pr_num> --approve`, squash-merge via `gh pr merge <pr_num> --squash --delete-branch`, and sync board status to `Done`.
+   - **If branch is `BEHIND` `staging` (Merge-Train Guard):** Check `gh pr view <pr_num> --json mergeStateStatus -q .mergeStateStatus`. If `BEHIND` (another PR merged to `staging` while CI ran), run `gh pr update-branch <pr_num>` and **STOP** — wait for the fresh CI run against the combined `staging` code before merging.
+   - **If clean, up-to-date, and ungated:** Run `gh pr review <pr_num> --approve`, squash-merge via `gh pr merge <pr_num> --squash --delete-branch`, and sync board status to `Done`.
    - **If `human-gate` locked:** Post a concise `⚙️ [Orchestrator]` verification summary and **STOP** (do not merge; human owner reviews in `Awaiting Approval`).
    - **If defects found:** Post specific line-level feedback via `gh pr review <pr_num> --request-changes` and dispatch a targeted fix via `.factory/dispatch-worker.sh`.

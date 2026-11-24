@@ -249,6 +249,7 @@ async function fetchPrMetaOnce(prNumber, headBranch = "") {
     ciSucceeded: ciState === "SUCCESS",
     humanGateBlocked: gateCheck ? gateState !== "SUCCESS" : false,
     isConflicting: pr.mergeable === "CONFLICTING" || pr.mergeStateStatus === "DIRTY",
+    isBehind: pr.mergeStateStatus === "BEHIND",
     headRefName: pr.headRefName || headBranch,
     baseRefName: pr.baseRefName || "",
   };
@@ -283,10 +284,19 @@ async function inspectPrMeta(prNumber, headBranch = "", waitIfGatePending = fals
       ciSucceeded: false,
       humanGateBlocked: Boolean(waitIfGatePending),
       isConflicting: false,
+      isBehind: false,
       headRefName: headBranch,
       baseRefName: "",
     };
   }
+}
+
+function shouldSyncBehindPr(prMeta = {}) {
+  if (!prMeta || prMeta.baseRefName !== "staging") return false;
+  if (!prMeta.isBehind || prMeta.isConflicting) return false;
+  if (prMeta.humanGateBlocked || prMeta.hasHumanGateLabel) return false;
+  if (Array.isArray(prMeta.labels) && prMeta.labels.includes("blocked")) return false;
+  return true;
 }
 
 function classifyCiFailure(strikes, hasRescueEscalated = false, maxRetries = MAX_CI_RETRIES) {
@@ -758,7 +768,7 @@ async function handleEvent(event, payload) {
       }
     } else {
       enqueueOrchestratorPrompt(
-        `[GITHUB EVENT: SUB-ISSUE MERGED] PR #${pr.number} (Sub-Issue #${linkedIssue}) merged to staging. Parent Epic #${parentEpic.number} progress: ${summary.completed}/${summary.total}. Dispatch next unblocked sub-issues using .factory/dispatch-worker.sh.`,
+        `[GITHUB EVENT: SUB-ISSUE MERGED] PR #${pr.number} (Sub-Issue #${linkedIssue}) merged to staging. Parent Epic #${parentEpic.number} progress: ${summary.completed}/${summary.total}. Inspect '.factory/sub-issue.sh list ${parentEpic.number}' and immediately dispatch any Sub-Issues whose 'Depends On:' prerequisites are now closed to idle workers via .factory/dispatch-worker.sh (work-stealing DAG — do NOT wait for unrelated slower PRs in the same wave).`,
         { priority: PRIORITY.REVIEW_WAVE, kind: "wave_check", threadKey: `issue:${parentEpic.number}` }
       );
     }
@@ -851,6 +861,29 @@ async function handleEvent(event, payload) {
         enqueueOrchestratorPrompt(
           `[GITHUB EVENT: CI PASSED — GATED] PR #${prNumber} passed CI, moved to Awaiting Approval. Post review summary and STOP.`,
           { priority: PRIORITY.REVIEW_WAVE, kind: "ci_gated", threadKey: `pr:${prNumber}` }
+        );
+      } else if (shouldSyncBehindPr(prMeta)) {
+        // Merge-train guard: sync stale PR branch with latest staging so CI tests combined changes before squash-merge
+        try {
+          await ghAsArchitect(["pr", "update-branch", String(prNumber)]);
+          console.log(`[bridge:merge-train] PR #${prNumber} was BEHIND staging; synced branch via 'gh pr update-branch' — awaiting fresh CI run before merge.`);
+          return;
+        } catch (err) {
+          console.warn(`[bridge:merge-train] 'gh pr update-branch ${prNumber}' failed (${err.message}); checking for conflict...`);
+          const refreshed = await inspectPrMeta(prNumber, run.head_branch);
+          if (refreshed.isConflicting && !refreshed.hasRescueEscalated) {
+            await ghAsArchitect(["pr", "edit", String(prNumber), "--add-label", "rescue-escalated"]).catch(() => {});
+            enqueueOrchestratorPrompt(
+              `[GITHUB EVENT: MERGE CONFLICT ON MERGE-TRAIN SYNC] PR #${prNumber} conflicted when syncing latest staging. Dispatch 1-pass conflict resolution to worker-agy with '--model ${AGY_RESCUE_MODEL}' using skill: conflict-and-rescue via .factory/dispatch-worker.sh.`,
+              { priority: PRIORITY.CI_URGENT, kind: "merge_conflict", threadKey: `pr:${prNumber}` }
+            );
+            return;
+          }
+        }
+        if (prMeta.linkedIssue) await syncBoardField(prMeta.linkedIssue, "Status", "In Review");
+        enqueueOrchestratorPrompt(
+          `[GITHUB EVENT: CI PASSED] PR #${prNumber} passed CI with no protected path locks. Review diff & evidence via .factory/fetch-evidence.sh and skill: pr-evidence-review. If verified, squash-merge to staging.`,
+          { priority: PRIORITY.REVIEW_WAVE, kind: "ci_passed", threadKey: `pr:${prNumber}` }
         );
       } else {
         if (prMeta.linkedIssue) await syncBoardField(prMeta.linkedIssue, "Status", "In Review");
@@ -1094,6 +1127,7 @@ export {
   recordDeliveryIfNew,
   extractLinkedIssue,
   classifyCiFailure,
+  shouldSyncBehindPr,
   resolveHumanFeedbackTarget,
   coalesceComment,
   flushPendingComments,

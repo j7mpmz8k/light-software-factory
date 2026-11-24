@@ -18,6 +18,7 @@ const {
   recordDeliveryIfNew,
   extractLinkedIssue,
   classifyCiFailure,
+  shouldSyncBehindPr,
   resolveHumanFeedbackTarget,
   coalesceComment,
   flushPendingComments,
@@ -180,5 +181,19 @@ describe("Webhook Bridge Unit Tests", () => {
     assert.ok(idx >= 0);
     assert.match(queue[idx].prompt, /herdr agent prompt architect/);
     queue.splice(idx, 1);
+  });
+
+  test("shouldSyncBehindPr triggers merge-train branch sync only on ungated, non-conflicting staging PRs", () => {
+    assert.equal(
+      shouldSyncBehindPr({ baseRefName: "staging", isBehind: true, isConflicting: false, humanGateBlocked: false, hasHumanGateLabel: false, labels: [] }),
+      true
+    );
+    // Do not auto-sync when already up to date, conflicting, human-gated, blocked, or targeting main
+    assert.equal(shouldSyncBehindPr({ baseRefName: "staging", isBehind: false, isConflicting: false }), false);
+    assert.equal(shouldSyncBehindPr({ baseRefName: "staging", isBehind: true, isConflicting: true }), false);
+    assert.equal(shouldSyncBehindPr({ baseRefName: "staging", isBehind: true, humanGateBlocked: true }), false);
+    assert.equal(shouldSyncBehindPr({ baseRefName: "staging", isBehind: true, hasHumanGateLabel: true }), false);
+    assert.equal(shouldSyncBehindPr({ baseRefName: "staging", isBehind: true, labels: ["blocked"] }), false);
+    assert.equal(shouldSyncBehindPr({ baseRefName: "main", isBehind: true, isConflicting: false }), false);
   });
 });
